@@ -51,6 +51,7 @@ jobs:
         run: |
           mkdir -p "${{ steps.project.outputs.dir }}/reports"
           mkdir -p "${{ steps.project.outputs.dir }}/reports/dependency-check"
+          mkdir -p "${RUNNER_TEMP}/dependency-check-data"
 
       - name: Secrets scan - Gitleaks (SARIF)
         shell: bash
@@ -99,14 +100,20 @@ jobs:
 
       # OWASP Dependency-Check: SCA scanner for third-party package CVEs.
       - name: SCA - OWASP Dependency-Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: pygoat
-          path: ${{ steps.project.outputs.dir }}
-          format: "HTML,JSON,JUNIT"
-          out: ${{ steps.project.outputs.dir }}/reports/dependency-check
-          args: >
-            --enableRetired
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/src:rw" \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check:/report:rw" \
+            -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
+            owasp/dependency-check:latest \
+            --scan /src \
+            --project "pygoat" \
+            --format "HTML" \
+            --format "JSON" \
+            --format "JUNIT" \
+            --out /report \
+            --enableRetired || true
         continue-on-error: true
 
       - name: Normalize Dependency-Check artifacts
@@ -184,10 +191,12 @@ jobs:
 
       - name: Start app container for DAST
         run: |
+          docker network create zap-net || true
           docker run -d --name pygoat-app -p 8000:8000 pygoat:ci \
+            --network zap-net \
             sh -c "python manage.py migrate --noinput && gunicorn --bind 0.0.0.0:8000 --workers 3 --threads 2 --timeout 60 pygoat.wsgi:application"
           for i in {1..45}; do
-            if curl -fsS http://127.0.0.1:8000/ > /dev/null; then
+            if docker run --rm --network zap-net curlimages/curl:8.10.1 -fsS http://pygoat-app:8000/ > /dev/null; then
               echo "App is reachable for ZAP."
               exit 0
             fi
@@ -200,10 +209,10 @@ jobs:
       # OWASP ZAP baseline: DAST scan against a live running app endpoint.
       - name: DAST - OWASP ZAP baseline scan
         run: |
-          docker run --rm --network host \
+          docker run --rm --network zap-net \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-            -t http://127.0.0.1:8000 \
+            -t http://pygoat-app:8000 \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
@@ -240,7 +249,9 @@ jobs:
 
       - name: Stop app container
         if: always()
-        run: docker rm -f pygoat-app || true
+        run: |
+          docker rm -f pygoat-app || true
+          docker network rm zap-net || true
 
       - name: Build consolidated report summary
         if: always()
@@ -359,7 +370,7 @@ jobs:
             except json.JSONDecodeError:
               return None
             if data.get("status") == "missing":
-              return None
+              return {"missing": True, "message": data.get("message", "report missing")}
             deps = data.get("dependencies", [])
             cves = 0
             for dep in deps:
@@ -378,7 +389,7 @@ jobs:
             except json.JSONDecodeError:
               return {"status": "available"}
             if isinstance(data, dict) and data.get("status") == "missing":
-              return None
+              return {"status": "missing", "message": data.get("message", "report missing")}
             return {"status": "available"}
 
           semgrep = parse_sarif("semgrep.sarif")
@@ -407,8 +418,14 @@ jobs:
             f"| Flake8 | issues={flake8['total'] if flake8 else 'N/A'}; top={flake8['top'] if flake8 else '-'} |",
             f"| Pylint | score={pylint['score'] if pylint else 'N/A'}/10 |",
             f"| Safety | vulnerabilities={safety['total'] if safety else 'N/A'} |",
-            f"| OWASP Dependency-Check | dependencies={depcheck['dependencies'] if depcheck else 'N/A'}; CVEs={depcheck['cves'] if depcheck else 'N/A'} |",
-            f"| OWASP ZAP (DAST) | report={'available' if zap else 'N/A'} |",
+            f"| OWASP Dependency-Check | " + (
+              f"dependencies={depcheck['dependencies']}; CVEs={depcheck['cves']}" if depcheck and not depcheck.get('missing')
+              else (depcheck.get('message', 'N/A') if depcheck else 'N/A')
+            ) + " |",
+            f"| OWASP ZAP (DAST) | " + (
+              "report=available" if zap and zap.get("status") == "available"
+              else (zap.get("message", "report missing") if zap else "N/A")
+            ) + " |",
             f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)} |",
             f"| Trivy deps (SARIF) | findings={trivy_deps['total'] if trivy_deps else 'N/A'}; levels={fmt_levels(trivy_deps)} |",
             f"| Trivy image (SARIF) | findings={trivy_image['total'] if trivy_image else 'N/A'}; levels={fmt_levels(trivy_image)} |",

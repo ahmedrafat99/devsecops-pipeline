@@ -45,6 +45,14 @@ jobs:
         if: always()
         shell: bash
         run: |
+          cat > codeql-summary.md <<'EOF'
+          # CodeQL Report
+
+          - Workflow: CodeQL Security Scan
+          - Language: ${{ matrix.language }}
+          - Alerts location: Security -> Code scanning alerts
+          - Note: CodeQL does not produce the `devsecops-reports` zip artifact.
+          EOF
           {
             echo "## CodeQL"
             echo ""
@@ -52,3 +60,10 @@ jobs:
             echo "- Result: uploaded to GitHub Code Scanning (Security tab)"
             echo "- Scope: repository files (includes \`python/pygoat_flat\` paths)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CodeQL summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-summary
+          path: codeql-summary.md
