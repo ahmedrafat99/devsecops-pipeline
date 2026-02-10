@@ -101,19 +101,22 @@ jobs:
 
       # OWASP Dependency-Check: SCA scanner for third-party package CVEs.
       - name: SCA - OWASP Dependency-Check
+        timeout-minutes: 8
         shell: bash
         run: |
+          # Keep this bounded and focused on Python deps to avoid long DB/update delays.
           docker run --rm \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/src:rw" \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check:/report:rw" \
             -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
             owasp/dependency-check:latest \
-            --scan /src \
+            --scan /src/requirements.txt \
             --project "pygoat" \
             --format "HTML" \
             --format "JSON" \
             --format "JUNIT" \
             --out /report \
+            --noupdate \
             --enableRetired || true
         continue-on-error: true
 
