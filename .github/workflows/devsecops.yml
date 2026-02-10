@@ -54,6 +54,14 @@ jobs:
           mkdir -p "${{ steps.project.outputs.dir }}/reports/dependency-check"
           mkdir -p "${RUNNER_TEMP}/dependency-check-data"
 
+      - name: Cache Dependency-Check data
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dependency-check-data
+          key: dependency-check-db-${{ runner.os }}-${{ hashFiles('python/pygoat_flat/requirements.txt', 'python/pygoat/requirements.txt', 'requirements.txt') }}
+          restore-keys: |
+            dependency-check-db-${{ runner.os }}-
+
       - name: Secrets scan - Gitleaks (SARIF)
         shell: bash
         run: |
@@ -100,11 +108,22 @@ jobs:
           python manage.py test --verbosity 2 | tee reports/unit-tests.txt
 
       # OWASP Dependency-Check: SCA scanner for third-party package CVEs.
-      - name: SCA - OWASP Dependency-Check
-        timeout-minutes: 8
+      - name: SCA - Dependency-Check DB update
+        timeout-minutes: 6
         shell: bash
         run: |
-          # Keep this bounded and focused on Python deps to avoid long DB/update delays.
+          docker run --rm \
+            -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
+            owasp/dependency-check:latest \
+            --updateonly \
+            --nvdValidForHours 24 || true
+        continue-on-error: true
+
+      - name: SCA - OWASP Dependency-Check
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          # Scan only dependency manifests and reuse warmed local DB for reliability.
           docker run --rm \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/src:rw" \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check:/report:rw" \
@@ -116,7 +135,9 @@ jobs:
             --format "JSON" \
             --format "JUNIT" \
             --out /report \
+            --log /report/dependency-check.log \
             --noupdate \
+            --nvdValidForHours 24 \
             --enableRetired || true
         continue-on-error: true
 
