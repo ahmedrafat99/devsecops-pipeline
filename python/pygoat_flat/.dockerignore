@@ -1,0 +1,14 @@
+.git
+.github
+.vscode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+.env
+.venv/
+venv/
+docs/
+chatbot/
+Solutions/
