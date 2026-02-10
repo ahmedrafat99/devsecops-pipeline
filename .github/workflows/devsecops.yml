@@ -1,0 +1,426 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  devsecops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Detect project directory
+        id: project
+        shell: bash
+        run: |
+          if [ -f "python/pygoat_flat/manage.py" ]; then
+            echo "dir=python/pygoat_flat" >> "$GITHUB_OUTPUT"
+          elif [ -f "python/pygoat/manage.py" ]; then
+            echo "dir=python/pygoat" >> "$GITHUB_OUTPUT"
+          elif [ -f "manage.py" ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          else
+            echo "Could not find manage.py in expected locations"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java (required by Dependency-Check)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Create report directories
+        shell: bash
+        run: |
+          mkdir -p "${{ steps.project.outputs.dir }}/reports"
+          mkdir -p "${{ steps.project.outputs.dir }}/reports/dependency-check"
+
+      - name: Secrets scan - Gitleaks (SARIF)
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" zricethezav/gitleaks:latest detect \
+            --source="/repo" \
+            --report-format sarif \
+            --report-path "/repo/${{ steps.project.outputs.dir }}/reports/gitleaks.sarif" \
+            --exit-code 0
+        continue-on-error: true
+
+      - name: Secrets scan - TruffleHog (JSON)
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/pwd" trufflesecurity/trufflehog:latest filesystem \
+            --directory=/pwd \
+            --json \
+            > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
+        continue-on-error: true
+
+      - name: Install application and security tooling
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 pylint "safety<3" semgrep
+
+      - name: Lint - flake8
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          set -o pipefail
+          flake8 . --statistics --count | tee reports/flake8.txt
+        continue-on-error: true
+
+      - name: SAST - pylint
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          set -o pipefail
+          pylint challenge introduction pygoat manage.py --exit-zero | tee reports/pylint.txt
+
+      - name: Unit tests (unittest via Django test runner)
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          set -o pipefail
+          python manage.py test --verbosity 2 | tee reports/unit-tests.txt
+
+      - name: SCA - OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: pygoat
+          path: ${{ steps.project.outputs.dir }}
+          format: "HTML,JSON,JUNIT"
+          out: ${{ steps.project.outputs.dir }}/reports/dependency-check
+          args: >
+            --enableRetired
+        continue-on-error: true
+
+      - name: Normalize Dependency-Check artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          mkdir -p "$REPORT_DIR/dependency-check"
+          if [ ! -f "$REPORT_DIR/dependency-check/dependency-check-report.html" ]; then
+            cat > "$REPORT_DIR/dependency-check/dependency-check-report.html" <<'EOF'
+          <html><body><h1>Dependency-Check report missing</h1><p>Dependency-Check did not generate HTML output in this run. Check the SCA step logs.</p></body></html>
+          EOF
+          fi
+          if [ ! -f "$REPORT_DIR/dependency-check/dependency-check-report.json" ]; then
+            cat > "$REPORT_DIR/dependency-check/dependency-check-report.json" <<'EOF'
+          {"status":"missing","message":"Dependency-Check did not generate JSON output in this run. Check the SCA step logs."}
+          EOF
+          fi
+          if [ ! -f "$REPORT_DIR/dependency-check/dependency-check-report.junit.xml" ]; then
+            cat > "$REPORT_DIR/dependency-check/dependency-check-report.junit.xml" <<'EOF'
+          <testsuites><testsuite name="dependency-check" tests="1" failures="1"><testcase classname="dependency-check" name="report-generation"><failure message="Dependency-Check JUnit report missing">Dependency-Check did not generate JUnit output in this run. Check the SCA step logs.</failure></testcase></testsuite></testsuites>
+          EOF
+          fi
+
+      - name: SCA - Safety
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          safety check -r requirements.txt --full-report --json > reports/safety.json || true
+          safety check -r requirements.txt --full-report > reports/safety.txt || true
+          if [ ! -s reports/safety.json ]; then
+            echo '{"status":"missing","message":"Safety JSON output was not generated; see safety.txt for full details."}' > reports/safety.json
+          fi
+        continue-on-error: true
+
+      - name: SAST - Semgrep (SARIF)
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          semgrep scan --config auto --sarif --output reports/semgrep.sarif .
+        continue-on-error: true
+
+      - name: SCA - Trivy filesystem scan (Python dependencies)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ steps.project.outputs.dir }}
+          vuln-type: library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
+        continue-on-error: true
+
+      - name: Build Docker image
+        run: docker build -t pygoat:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
+
+      - name: Container scan - Trivy image (human-readable)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: pygoat:ci
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: table
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-image.txt
+        continue-on-error: true
+
+      - name: Container scan - Trivy image (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: pygoat:ci
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
+        continue-on-error: true
+
+      - name: Start app container for DAST
+        run: |
+          docker run --rm --name pygoat-migrate pygoat:ci python manage.py migrate --noinput
+          docker run -d --name pygoat-app -p 8000:8000 pygoat:ci
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/ > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs pygoat-app
+          exit 1
+
+      - name: DAST - OWASP ZAP baseline scan
+        run: |
+          docker run --rm --network host \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://127.0.0.1:8000 \
+            -r zap-report.html \
+            -J zap-report.json \
+            -x zap-report.xml \
+            -w zap-warnings.md
+        continue-on-error: true
+
+      - name: Normalize ZAP artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          if [ ! -f "$REPORT_DIR/zap-report.html" ]; then
+            cat > "$REPORT_DIR/zap-report.html" <<'EOF'
+          <html><body><h1>ZAP report missing</h1><p>ZAP did not generate this report in this run. Check the DAST step logs.</p></body></html>
+          EOF
+          fi
+          if [ ! -f "$REPORT_DIR/zap-report.json" ]; then
+            cat > "$REPORT_DIR/zap-report.json" <<'EOF'
+          {"status":"missing","message":"ZAP did not generate JSON report in this run. Check the DAST step logs."}
+          EOF
+          fi
+          if [ ! -f "$REPORT_DIR/zap-report.xml" ]; then
+            cat > "$REPORT_DIR/zap-report.xml" <<'EOF'
+          <report status="missing" message="ZAP did not generate XML report in this run. Check the DAST step logs."/>
+          EOF
+          fi
+          if [ ! -f "$REPORT_DIR/zap-warnings.md" ]; then
+            cat > "$REPORT_DIR/zap-warnings.md" <<'EOF'
+          # ZAP warnings
+          ZAP warnings report was not generated in this run.
+          EOF
+          fi
+
+      - name: Stop app container
+        if: always()
+        run: docker rm -f pygoat-app || true
+
+      - name: Build consolidated report summary
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          report_dir = Path(os.environ["REPORT_DIR"])
+          summary_path = report_dir / "summary.md"
+
+          def read_text(name: str) -> str:
+            path = report_dir / name
+            if not path.exists():
+              return ""
+            return path.read_text(encoding="utf-8", errors="replace")
+
+          def parse_sarif(name: str):
+            raw = read_text(name)
+            if not raw.strip():
+              return None
+            try:
+              data = json.loads(raw)
+            except json.JSONDecodeError:
+              return None
+            runs = data.get("runs", [])
+            if not runs:
+              return {"total": 0, "levels": {}}
+            results = runs[0].get("results", [])
+            rules = runs[0].get("tool", {}).get("driver", {}).get("rules", [])
+            default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
+            levels = Counter()
+            for item in results:
+              lvl = item.get("level") or default_level.get(item.get("ruleId")) or "unknown"
+              levels[lvl] += 1
+            return {"total": len(results), "levels": dict(sorted(levels.items()))}
+
+          def parse_flake8():
+            raw = read_text("flake8.txt")
+            if not raw:
+              return None
+            lines = [x for x in raw.splitlines() if x.strip()]
+            counts = Counter()
+            for ln in lines:
+              m = re.search(r":\s*([A-Z]\d{3})\b", ln)
+              if m:
+                counts[m.group(1)] += 1
+            top = ", ".join(f"{k}:{v}" for k, v in counts.most_common(8))
+            return {"total": len(lines), "top": top}
+
+          def parse_pylint():
+            raw = read_text("pylint.txt")
+            if not raw:
+              return None
+            m = re.search(r"rated at\s+([0-9.]+)/10", raw)
+            score = m.group(1) if m else "N/A"
+            return {"score": score}
+
+          def parse_safety():
+            raw = read_text("safety.txt")
+            if not raw:
+              return None
+            m = re.search(r"(\d+)\s+vulnerabilities found", raw, flags=re.IGNORECASE)
+            total = m.group(1) if m else "N/A"
+            return {"total": total}
+
+          def parse_tests():
+            raw = read_text("unit-tests.txt")
+            if not raw:
+              return None
+            m = re.search(r"Found\s+(\d+)\s+test\(s\)", raw)
+            total = m.group(1) if m else "N/A"
+            return {"total": total}
+
+          def parse_trufflehog():
+            path = report_dir / "trufflehog.json"
+            if not path.exists():
+              return None
+            findings = 0
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+              line = line.strip()
+              if not line:
+                continue
+              try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                  findings += 1
+              except json.JSONDecodeError:
+                pass
+            return {"total": findings}
+
+          def parse_dependency_check():
+            path = report_dir / "dependency-check" / "dependency-check-report.json"
+            if not path.exists():
+              return None
+            try:
+              data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            except json.JSONDecodeError:
+              return None
+            if data.get("status") == "missing":
+              return None
+            deps = data.get("dependencies", [])
+            cves = 0
+            for dep in deps:
+              cves += len(dep.get("vulnerabilities") or [])
+            return {"dependencies": len(deps), "cves": cves}
+
+          def parse_zap():
+            path = report_dir / "zap-report.json"
+            if not path.exists():
+              return None
+            raw = path.read_text(encoding="utf-8", errors="replace").strip()
+            if not raw:
+              return None
+            try:
+              data = json.loads(raw)
+            except json.JSONDecodeError:
+              return {"status": "available"}
+            if isinstance(data, dict) and data.get("status") == "missing":
+              return None
+            return {"status": "available"}
+
+          semgrep = parse_sarif("semgrep.sarif")
+          trivy_deps = parse_sarif("trivy-deps.sarif")
+          trivy_image = parse_sarif("trivy-image.sarif")
+          gitleaks = parse_sarif("gitleaks.sarif")
+          flake8 = parse_flake8()
+          pylint = parse_pylint()
+          safety = parse_safety()
+          tests = parse_tests()
+          trufflehog = parse_trufflehog()
+          depcheck = parse_dependency_check()
+          zap = parse_zap()
+
+          def fmt_levels(obj):
+            if not obj or not obj.get("levels"):
+              return "-"
+            return ", ".join(f"{k}:{v}" for k, v in obj["levels"].items())
+
+          lines = [
+            "# DevSecOps Report Summary",
+            "",
+            "| Tool | Key Results |",
+            "|---|---|",
+            f"| Unit tests | discovered={tests['total'] if tests else 'N/A'} |",
+            f"| Flake8 | issues={flake8['total'] if flake8 else 'N/A'}; top={flake8['top'] if flake8 else '-'} |",
+            f"| Pylint | score={pylint['score'] if pylint else 'N/A'}/10 |",
+            f"| Safety | vulnerabilities={safety['total'] if safety else 'N/A'} |",
+            f"| OWASP Dependency-Check | dependencies={depcheck['dependencies'] if depcheck else 'N/A'}; CVEs={depcheck['cves'] if depcheck else 'N/A'} |",
+            f"| OWASP ZAP (DAST) | report={'available' if zap else 'N/A'} |",
+            f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)} |",
+            f"| Trivy deps (SARIF) | findings={trivy_deps['total'] if trivy_deps else 'N/A'}; levels={fmt_levels(trivy_deps)} |",
+            f"| Trivy image (SARIF) | findings={trivy_image['total'] if trivy_image else 'N/A'}; levels={fmt_levels(trivy_image)} |",
+            f"| Gitleaks (SARIF) | findings={gitleaks['total'] if gitleaks else 'N/A'}; levels={fmt_levels(gitleaks)} |",
+            f"| TruffleHog (JSON) | findings={trufflehog['total'] if trufflehog else 'N/A'} |",
+            "",
+            "## Files",
+            "",
+          ]
+
+          for p in sorted(report_dir.glob("**/*")):
+            if p.is_file():
+              rel = p.relative_to(report_dir)
+              lines.append(f"- `{rel.as_posix()}`")
+
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(summary_path.read_text(encoding="utf-8"))
+          PY
+
+      - name: Publish summary to workflow run
+        if: always()
+        shell: bash
+        run: |
+          cat "${{ steps.project.outputs.dir }}/reports/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devsecops-reports
+          path: ${{ steps.project.outputs.dir }}/reports
