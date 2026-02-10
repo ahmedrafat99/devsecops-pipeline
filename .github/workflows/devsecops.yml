@@ -97,6 +97,7 @@ jobs:
           set -o pipefail
           python manage.py test --verbosity 2 | tee reports/unit-tests.txt
 
+      # OWASP Dependency-Check: SCA scanner for third-party package CVEs.
       - name: SCA - OWASP Dependency-Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
@@ -196,6 +197,7 @@ jobs:
           docker logs pygoat-app || true
           exit 1
 
+      # OWASP ZAP baseline: DAST scan against a live running app endpoint.
       - name: DAST - OWASP ZAP baseline scan
         run: |
           docker run --rm --network host \
