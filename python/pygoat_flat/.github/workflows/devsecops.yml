@@ -67,7 +67,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 pylint "safety<3" semgrep pip-audit
+          pip install flake8 pylint "safety<3" semgrep
+          pip install --upgrade pip-audit
+          python - <<'PY'
+          import importlib.util
+          import subprocess
+          import sys
+
+          # Some runner environments resolve an incompatible cyclonedx library.
+          # pip-audit imports `cyclonedx.parser`, so ensure that module exists.
+          if importlib.util.find_spec("cyclonedx.parser") is None:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "cyclonedx-python-lib<4"])
+          PY
 
       - name: Lint - flake8
         working-directory: ${{ steps.project.outputs.dir }}
@@ -102,6 +113,11 @@ jobs:
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
           set +e
+          python -m pip show pip-audit cyclonedx-python-lib > reports/pip-audit-env.txt 2>&1
+          python - <<'PY' >> reports/pip-audit-env.txt 2>&1
+          import importlib.util
+          print("cyclonedx.parser module found:", bool(importlib.util.find_spec("cyclonedx.parser")))
+          PY
           python -m pip_audit -r requirements.txt --format json --output reports/pip-audit.json > reports/pip-audit-json.log 2>&1
           python -m pip_audit -r requirements.txt > reports/pip-audit.txt 2>&1
           # If text output is empty, preserve JSON-run logs for troubleshooting.
