@@ -104,11 +104,17 @@ jobs:
       - name: SCA - pip-audit
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          pip-audit -r requirements.txt --format json --output reports/pip-audit.json || true
-          pip-audit -r requirements.txt > reports/pip-audit.txt || true
+          set +e
+          python -m pip_audit -r requirements.txt --format json --output reports/pip-audit.json > reports/pip-audit-json.log 2>&1
+          python -m pip_audit -r requirements.txt > reports/pip-audit.txt 2>&1
+          # If text output is empty, preserve JSON-run logs for troubleshooting.
+          if [ ! -s reports/pip-audit.txt ] && [ -s reports/pip-audit-json.log ]; then
+            cp reports/pip-audit-json.log reports/pip-audit.txt
+          fi
           if [ ! -s reports/pip-audit.json ]; then
             echo '{"dependencies":[],"vulnerabilities":[],"message":"pip-audit JSON output was not generated; see pip-audit.txt for details."}' > reports/pip-audit.json
           fi
+          exit 0
         continue-on-error: true
 
       - name: SAST - Semgrep (SARIF)
