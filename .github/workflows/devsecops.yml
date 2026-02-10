@@ -109,8 +109,10 @@ jobs:
 
       # OWASP Dependency-Check: SCA scanner for third-party package CVEs.
       - name: SCA - Dependency-Check DB update
-        timeout-minutes: 6
+        timeout-minutes: 20
         shell: bash
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           set -euo pipefail
           REPORT_DIR="${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check"
@@ -118,12 +120,21 @@ jobs:
           UPDATE_LOG="$REPORT_DIR/dependency-check-update.log"
           rm -f "$UPDATE_LOG"
 
+          API_ARG=()
+          if [ -n "${NVD_API_KEY:-}" ]; then
+            echo "[dependency-check] Using NVD API key for faster DB update."
+            API_ARG+=(--nvdApiKey "$NVD_API_KEY")
+          else
+            echo "[dependency-check] NVD_API_KEY is not set; first update may be slow."
+          fi
+
           docker run --rm \
             -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
             -v "${REPORT_DIR}:/report:rw" \
             owasp/dependency-check:latest \
             --updateonly \
             --nvdValidForHours 24 \
+            "${API_ARG[@]}" \
             --log /report/dependency-check-update.log &
           DC_PID=$!
 
@@ -138,30 +149,47 @@ jobs:
         continue-on-error: true
 
       - name: SCA - OWASP Dependency-Check
-        timeout-minutes: 12
+        timeout-minutes: 25
         shell: bash
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           set -euo pipefail
           # Scan only dependency manifests and reuse warmed local DB for reliability.
           REPORT_DIR="${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check"
           SCAN_LOG="$REPORT_DIR/dependency-check.log"
           rm -f "$SCAN_LOG"
+          DATA_DIR="${RUNNER_TEMP}/dependency-check-data"
+
+          DC_ARGS=(
+            --scan /src/requirements.txt
+            --project "pygoat"
+            --format "HTML"
+            --format "JSON"
+            --format "JUNIT"
+            --out /report
+            --log /report/dependency-check.log
+            --nvdValidForHours 24
+            --enableRetired
+          )
+
+          if find "$DATA_DIR" -type f \( -name "*.mv.db" -o -name "*.db" \) | grep -q .; then
+            echo "[dependency-check] Existing DB found; running with --noupdate."
+            DC_ARGS+=(--noupdate)
+          else
+            echo "[dependency-check] No local DB found; scan will perform update."
+          fi
+
+          if [ -n "${NVD_API_KEY:-}" ]; then
+            DC_ARGS+=(--nvdApiKey "$NVD_API_KEY")
+          fi
 
           docker run --rm \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/src:rw" \
             -v "${REPORT_DIR}:/report:rw" \
             -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
             owasp/dependency-check:latest \
-            --scan /src/requirements.txt \
-            --project "pygoat" \
-            --format "HTML" \
-            --format "JSON" \
-            --format "JUNIT" \
-            --out /report \
-            --log /report/dependency-check.log \
-            --noupdate \
-            --nvdValidForHours 24 \
-            --enableRetired &
+            "${DC_ARGS[@]}" &
           DC_PID=$!
 
           while kill -0 "$DC_PID" 2>/dev/null; do
