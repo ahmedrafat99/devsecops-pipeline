@@ -196,7 +196,9 @@ jobs:
       # OWASP ZAP baseline: DAST scan against a live running app endpoint.
       - name: DAST - OWASP ZAP baseline scan
         run: |
+          chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
           docker run --rm --network host \
+            --user root \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://127.0.0.1:8000 \
