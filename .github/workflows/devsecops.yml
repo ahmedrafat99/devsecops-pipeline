@@ -196,8 +196,8 @@ jobs:
       - name: Start app container for DAST
         run: |
           docker network create zap-net || true
-          docker run -d --name pygoat-app -p 8000:8000 pygoat:ci \
-            --network zap-net \
+          docker run -d --name pygoat-app -p 8000:8000 --network zap-net \
+            pygoat:ci \
             sh -c "python manage.py migrate --noinput && gunicorn --bind 0.0.0.0:8000 --workers 3 --threads 2 --timeout 60 pygoat.wsgi:application"
           for i in {1..45}; do
             if docker run --rm --network zap-net curlimages/curl:8.10.1 -fsS http://pygoat-app:8000/ > /dev/null; then
