@@ -109,21 +109,44 @@ jobs:
         timeout-minutes: 6
         shell: bash
         run: |
+          set -euo pipefail
+          REPORT_DIR="${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check"
+          mkdir -p "$REPORT_DIR"
+          UPDATE_LOG="$REPORT_DIR/dependency-check-update.log"
+          rm -f "$UPDATE_LOG"
+
           docker run --rm \
             -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
+            -v "${REPORT_DIR}:/report:rw" \
             owasp/dependency-check:latest \
             --updateonly \
-            --nvdValidForHours 24 || true
+            --nvdValidForHours 24 \
+            --log /report/dependency-check-update.log &
+          DC_PID=$!
+
+          while kill -0 "$DC_PID" 2>/dev/null; do
+            echo "[dependency-check] DB update still running..."
+            if [ -f "$UPDATE_LOG" ]; then
+              tail -n 5 "$UPDATE_LOG" || true
+            fi
+            sleep 30
+          done
+          wait "$DC_PID" || true
         continue-on-error: true
 
       - name: SCA - OWASP Dependency-Check
         timeout-minutes: 12
         shell: bash
         run: |
+          set -euo pipefail
           # Scan only dependency manifests and reuse warmed local DB for reliability.
+          REPORT_DIR="${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check"
+          SCAN_LOG="$REPORT_DIR/dependency-check.log"
+          rm -f "$SCAN_LOG"
+
           docker run --rm \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/src:rw" \
-            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check:/report:rw" \
+            -v "${REPORT_DIR}:/report:rw" \
             -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
             owasp/dependency-check:latest \
             --scan /src/requirements.txt \
@@ -135,7 +158,17 @@ jobs:
             --log /report/dependency-check.log \
             --noupdate \
             --nvdValidForHours 24 \
-            --enableRetired || true
+            --enableRetired &
+          DC_PID=$!
+
+          while kill -0 "$DC_PID" 2>/dev/null; do
+            echo "[dependency-check] Scan still running..."
+            if [ -f "$SCAN_LOG" ]; then
+              tail -n 5 "$SCAN_LOG" || true
+            fi
+            sleep 30
+          done
+          wait "$DC_PID" || true
         continue-on-error: true
 
       - name: Normalize Dependency-Check artifacts
