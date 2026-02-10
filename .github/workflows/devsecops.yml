@@ -222,7 +222,8 @@ jobs:
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
-            -w zap-warnings.md
+            -w zap-warnings.md \
+            -I
         continue-on-error: true
 
       - name: Normalize ZAP artifacts
@@ -300,6 +301,35 @@ jobs:
               lvl = item.get("level") or default_level.get(item.get("ruleId")) or "unknown"
               levels[lvl] += 1
             return {"total": len(results), "levels": dict(sorted(levels.items()))}
+
+          def parse_trivy_severity(name: str):
+            raw = read_text(name)
+            if not raw.strip():
+              return None
+            try:
+              data = json.loads(raw)
+            except json.JSONDecodeError:
+              return None
+            runs = data.get("runs", [])
+            if not runs:
+              return None
+            rules = runs[0].get("tool", {}).get("driver", {}).get("rules", [])
+            results = runs[0].get("results", [])
+            sev_by_rule = {}
+            for rule in rules:
+              rid = rule.get("id")
+              tags = rule.get("properties", {}).get("tags", [])
+              sev = None
+              for t in tags:
+                tt = str(t).upper()
+                if tt in {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}:
+                  sev = tt
+                  break
+              sev_by_rule[rid] = sev or "UNKNOWN"
+            counts = Counter()
+            for item in results:
+              counts[sev_by_rule.get(item.get("ruleId"), "UNKNOWN")] += 1
+            return dict(sorted(counts.items()))
 
           def parse_flake8():
             raw = read_text("flake8.txt")
@@ -396,7 +426,18 @@ jobs:
               return {"status": "available"}
             if isinstance(data, dict) and data.get("status") == "missing":
               return {"status": "missing", "message": data.get("message", "report missing")}
-            return {"status": "available"}
+            sites = data.get("site", []) if isinstance(data, dict) else []
+            counts = Counter()
+            total = 0
+            risk_map = {"0": "info", "1": "low", "2": "medium", "3": "high"}
+            for site in sites:
+              for alert in site.get("alerts", []):
+                risk = risk_map.get(str(alert.get("riskcode", "")), "unknown")
+                instances = alert.get("instances") or []
+                n = len(instances) if instances else 1
+                counts[risk] += n
+                total += n
+            return {"status": "available", "alerts": total, "levels": dict(sorted(counts.items()))}
 
           semgrep = parse_sarif("semgrep.sarif")
           trivy_deps = parse_sarif("trivy-deps.sarif")
@@ -409,6 +450,8 @@ jobs:
           trufflehog = parse_trufflehog()
           depcheck = parse_dependency_check()
           zap = parse_zap()
+          trivy_deps_sev = parse_trivy_severity("trivy-deps.sarif")
+          trivy_image_sev = parse_trivy_severity("trivy-image.sarif")
 
           def fmt_levels(obj):
             if not obj or not obj.get("levels"):
@@ -429,12 +472,12 @@ jobs:
               else (depcheck.get('message', 'N/A') if depcheck else 'N/A')
             ) + " |",
             f"| OWASP ZAP (DAST) | " + (
-              "report=available" if zap and zap.get("status") == "available"
+              f"report=available; alerts={zap.get('alerts', 'N/A')}; levels={fmt_levels(zap)}" if zap and zap.get("status") == "available"
               else (zap.get("message", "report missing") if zap else "N/A")
             ) + " |",
             f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)} |",
-            f"| Trivy deps (SARIF) | findings={trivy_deps['total'] if trivy_deps else 'N/A'}; levels={fmt_levels(trivy_deps)} |",
-            f"| Trivy image (SARIF) | findings={trivy_image['total'] if trivy_image else 'N/A'}; levels={fmt_levels(trivy_image)} |",
+            f"| Trivy deps (SARIF) | findings={trivy_deps['total'] if trivy_deps else 'N/A'}; levels={fmt_levels(trivy_deps)}; severities={', '.join([f'{k}:{v}' for k,v in (trivy_deps_sev or {}).items()]) if trivy_deps_sev else 'N/A'} |",
+            f"| Trivy image (SARIF) | findings={trivy_image['total'] if trivy_image else 'N/A'}; levels={fmt_levels(trivy_image)}; severities={', '.join([f'{k}:{v}' for k,v in (trivy_image_sev or {}).items()]) if trivy_image_sev else 'N/A'} |",
             f"| Gitleaks (SARIF) | findings={gitleaks['total'] if gitleaks else 'N/A'}; levels={fmt_levels(gitleaks)} |",
             f"| TruffleHog (JSON) | findings={trufflehog['total'] if trufflehog else 'N/A'} |",
             "",
