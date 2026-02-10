@@ -19,7 +19,7 @@ oauthlib==3.2.2
 Pillow==9.4.0
 psycopg2==2.9.3
 pycodestyle==2.7.0
-pycparser==2.21
+pycparser==2.23
 pyflakes==2.3.1
 PyJWT==2.4.0
 python3-openid==3.2.0
