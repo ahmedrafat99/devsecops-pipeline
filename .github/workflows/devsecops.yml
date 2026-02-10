@@ -41,26 +41,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Java (required by Dependency-Check)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
       - name: Create report directories
         shell: bash
         run: |
           mkdir -p "${{ steps.project.outputs.dir }}/reports"
-          mkdir -p "${{ steps.project.outputs.dir }}/reports/dependency-check"
-          mkdir -p "${RUNNER_TEMP}/dependency-check-data"
-
-      - name: Cache Dependency-Check data
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/dependency-check-data
-          key: dependency-check-db-${{ runner.os }}-${{ hashFiles('python/pygoat_flat/requirements.txt', 'python/pygoat/requirements.txt', 'requirements.txt') }}
-          restore-keys: |
-            dependency-check-db-${{ runner.os }}-
 
       - name: Secrets scan - Gitleaks (SARIF)
         shell: bash
@@ -86,7 +70,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 pylint "safety<3" semgrep
+          pip install flake8 pylint "safety<3" semgrep pip-audit
 
       - name: Lint - flake8
         working-directory: ${{ steps.project.outputs.dir }}
@@ -107,124 +91,6 @@ jobs:
           set -o pipefail
           python manage.py test --verbosity 2 | tee reports/unit-tests.txt
 
-      # OWASP Dependency-Check: SCA scanner for third-party package CVEs.
-      - name: SCA - Dependency-Check DB update
-        timeout-minutes: 20
-        shell: bash
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          set -euo pipefail
-          REPORT_DIR="${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check"
-          mkdir -p "$REPORT_DIR"
-          UPDATE_LOG="$REPORT_DIR/dependency-check-update.log"
-          rm -f "$UPDATE_LOG"
-
-          API_ARG=()
-          if [ -n "${NVD_API_KEY:-}" ]; then
-            echo "[dependency-check] Using NVD API key for faster DB update."
-            API_ARG+=(--nvdApiKey "$NVD_API_KEY")
-          else
-            echo "[dependency-check] NVD_API_KEY is not set; first update may be slow."
-          fi
-
-          docker run --rm \
-            -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
-            -v "${REPORT_DIR}:/report:rw" \
-            owasp/dependency-check:latest \
-            --updateonly \
-            --nvdValidForHours 24 \
-            "${API_ARG[@]}" \
-            --log /report/dependency-check-update.log &
-          DC_PID=$!
-
-          while kill -0 "$DC_PID" 2>/dev/null; do
-            echo "[dependency-check] DB update still running..."
-            if [ -f "$UPDATE_LOG" ]; then
-              tail -n 5 "$UPDATE_LOG" || true
-            fi
-            sleep 30
-          done
-          wait "$DC_PID" || true
-        continue-on-error: true
-
-      - name: SCA - OWASP Dependency-Check
-        timeout-minutes: 25
-        shell: bash
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          set -euo pipefail
-          # Scan only dependency manifests and reuse warmed local DB for reliability.
-          REPORT_DIR="${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports/dependency-check"
-          SCAN_LOG="$REPORT_DIR/dependency-check.log"
-          rm -f "$SCAN_LOG"
-          DATA_DIR="${RUNNER_TEMP}/dependency-check-data"
-
-          DC_ARGS=(
-            --scan /src/requirements.txt
-            --project "pygoat"
-            --format "HTML"
-            --format "JSON"
-            --format "JUNIT"
-            --out /report
-            --log /report/dependency-check.log
-            --nvdValidForHours 24
-            --enableRetired
-          )
-
-          if find "$DATA_DIR" -type f \( -name "*.mv.db" -o -name "*.db" \) | grep -q .; then
-            echo "[dependency-check] Existing DB found; running with --noupdate."
-            DC_ARGS+=(--noupdate)
-          else
-            echo "[dependency-check] No local DB found; scan will perform update."
-          fi
-
-          if [ -n "${NVD_API_KEY:-}" ]; then
-            DC_ARGS+=(--nvdApiKey "$NVD_API_KEY")
-          fi
-
-          docker run --rm \
-            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/src:rw" \
-            -v "${REPORT_DIR}:/report:rw" \
-            -v "${RUNNER_TEMP}/dependency-check-data:/usr/share/dependency-check/data:rw" \
-            owasp/dependency-check:latest \
-            "${DC_ARGS[@]}" &
-          DC_PID=$!
-
-          while kill -0 "$DC_PID" 2>/dev/null; do
-            echo "[dependency-check] Scan still running..."
-            if [ -f "$SCAN_LOG" ]; then
-              tail -n 5 "$SCAN_LOG" || true
-            fi
-            sleep 30
-          done
-          wait "$DC_PID" || true
-        continue-on-error: true
-
-      - name: Normalize Dependency-Check artifacts
-        if: always()
-        shell: bash
-        env:
-          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
-        run: |
-          mkdir -p "$REPORT_DIR/dependency-check"
-          if [ ! -f "$REPORT_DIR/dependency-check/dependency-check-report.html" ]; then
-            cat > "$REPORT_DIR/dependency-check/dependency-check-report.html" <<'EOF'
-          <html><body><h1>Dependency-Check report missing</h1><p>Dependency-Check did not generate HTML output in this run. Check the SCA step logs.</p></body></html>
-          EOF
-          fi
-          if [ ! -f "$REPORT_DIR/dependency-check/dependency-check-report.json" ]; then
-            cat > "$REPORT_DIR/dependency-check/dependency-check-report.json" <<'EOF'
-          {"status":"missing","message":"Dependency-Check did not generate JSON output in this run. Check the SCA step logs."}
-          EOF
-          fi
-          if [ ! -f "$REPORT_DIR/dependency-check/dependency-check-report.junit.xml" ]; then
-            cat > "$REPORT_DIR/dependency-check/dependency-check-report.junit.xml" <<'EOF'
-          <testsuites><testsuite name="dependency-check" tests="1" failures="1"><testcase classname="dependency-check" name="report-generation"><failure message="Dependency-Check JUnit report missing">Dependency-Check did not generate JUnit output in this run. Check the SCA step logs.</failure></testcase></testsuite></testsuites>
-          EOF
-          fi
-
       - name: SCA - Safety
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
@@ -232,6 +98,16 @@ jobs:
           safety check -r requirements.txt --full-report > reports/safety.txt || true
           if [ ! -s reports/safety.json ]; then
             echo '{"status":"missing","message":"Safety JSON output was not generated; see safety.txt for full details."}' > reports/safety.json
+          fi
+        continue-on-error: true
+
+      - name: SCA - pip-audit
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          pip-audit -r requirements.txt --format json --output reports/pip-audit.json || true
+          pip-audit -r requirements.txt > reports/pip-audit.txt || true
+          if [ ! -s reports/pip-audit.json ]; then
+            echo '{"dependencies":[],"vulnerabilities":[],"message":"pip-audit JSON output was not generated; see pip-audit.txt for details."}' > reports/pip-audit.json
           fi
         continue-on-error: true
 
@@ -479,21 +355,34 @@ jobs:
                 pass
             return {"total": findings}
 
-          def parse_dependency_check():
-            path = report_dir / "dependency-check" / "dependency-check-report.json"
+          def parse_pip_audit():
+            path = report_dir / "pip-audit.json"
             if not path.exists():
               return None
+            raw = path.read_text(encoding="utf-8", errors="replace").strip()
+            if not raw:
+              return None
             try:
-              data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+              data = json.loads(raw)
             except json.JSONDecodeError:
               return None
-            if data.get("status") == "missing":
+            if isinstance(data, dict) and data.get("message"):
               return {"missing": True, "message": data.get("message", "report missing")}
-            deps = data.get("dependencies", [])
-            cves = 0
+            deps = []
+            if isinstance(data, list):
+              deps = data
+            elif isinstance(data, dict):
+              deps = data.get("dependencies", [])
+            vuln_count = 0
+            ids = set()
             for dep in deps:
-              cves += len(dep.get("vulnerabilities") or [])
-            return {"dependencies": len(deps), "cves": cves}
+              vulns = dep.get("vulns") or dep.get("vulnerabilities") or []
+              vuln_count += len(vulns)
+              for v in vulns:
+                vid = v.get("id") or v.get("alias")
+                if vid:
+                  ids.add(str(vid))
+            return {"dependencies": len(deps), "vulnerabilities": vuln_count, "unique_ids": len(ids)}
 
           def parse_zap():
             path = report_dir / "zap-report.json"
@@ -530,7 +419,7 @@ jobs:
           safety = parse_safety()
           tests = parse_tests()
           trufflehog = parse_trufflehog()
-          depcheck = parse_dependency_check()
+          pip_audit = parse_pip_audit()
           zap = parse_zap()
           trivy_deps_sev = parse_trivy_severity("trivy-deps.sarif")
           trivy_image_sev = parse_trivy_severity("trivy-image.sarif")
@@ -549,9 +438,9 @@ jobs:
             f"| Flake8 | issues={flake8['total'] if flake8 else 'N/A'}; top={flake8['top'] if flake8 else '-'} |",
             f"| Pylint | score={pylint['score'] if pylint else 'N/A'}/10 |",
             f"| Safety | vulnerabilities={safety['total'] if safety else 'N/A'} |",
-            f"| OWASP Dependency-Check | " + (
-              f"dependencies={depcheck['dependencies']}; CVEs={depcheck['cves']}" if depcheck and not depcheck.get('missing')
-              else (depcheck.get('message', 'N/A') if depcheck else 'N/A')
+            f"| pip-audit | " + (
+              f"dependencies={pip_audit['dependencies']}; vulnerabilities={pip_audit['vulnerabilities']}; advisories={pip_audit['unique_ids']}" if pip_audit and not pip_audit.get('missing')
+              else (pip_audit.get('message', 'N/A') if pip_audit else 'N/A')
             ) + " |",
             f"| OWASP ZAP (DAST) | " + (
               f"report=available; alerts={zap.get('alerts', 'N/A')}; levels={fmt_levels(zap)}" if zap and zap.get("status") == "available"
