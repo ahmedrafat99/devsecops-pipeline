@@ -183,15 +183,17 @@ jobs:
 
       - name: Start app container for DAST
         run: |
-          docker run --rm --name pygoat-migrate pygoat:ci python manage.py migrate --noinput
-          docker run -d --name pygoat-app -p 8000:8000 pygoat:ci
-          for i in {1..30}; do
+          docker run -d --name pygoat-app -p 8000:8000 pygoat:ci \
+            sh -c "python manage.py migrate --noinput && gunicorn --bind 0.0.0.0:8000 --workers 3 --threads 2 --timeout 60 pygoat.wsgi:application"
+          for i in {1..45}; do
             if curl -fsS http://127.0.0.1:8000/ > /dev/null; then
+              echo "App is reachable for ZAP."
               exit 0
             fi
             sleep 2
           done
-          docker logs pygoat-app
+          echo "App did not become ready in time. Container logs:"
+          docker logs pygoat-app || true
           exit 1
 
       - name: DAST - OWASP ZAP baseline scan
@@ -302,10 +304,22 @@ jobs:
             return {"score": score}
 
           def parse_safety():
-            raw = read_text("safety.txt")
-            if not raw:
+            raw_text = read_text("safety.txt")
+            raw_json = read_text("safety.json")
+            if raw_json:
+              try:
+                data = json.loads(raw_json)
+                if isinstance(data, dict):
+                  vulns = data.get("vulnerabilities")
+                  if isinstance(vulns, list):
+                    return {"total": str(len(vulns))}
+              except json.JSONDecodeError:
+                pass
+            if not raw_text:
               return None
-            m = re.search(r"(\d+)\s+vulnerabilities found", raw, flags=re.IGNORECASE)
+            # Strip ANSI sequences from Safety text output for robust parsing.
+            cleaned = re.sub(r"\x1b\[[0-9;]*m", "", raw_text)
+            m = re.search(r"(\d+)\s+vulnerabilities found", cleaned, flags=re.IGNORECASE)
             total = m.group(1) if m else "N/A"
             return {"total": total}
 
