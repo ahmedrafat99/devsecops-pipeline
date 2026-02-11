@@ -1,0 +1,65 @@
+name: ReactJS DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "reactjs/**"
+      - ".github/workflows/reactjs-devsecops.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "reactjs/**"
+      - ".github/workflows/reactjs-devsecops.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reactjs-devsecops:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reactjs
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate React project presence
+        shell: bash
+        run: |
+          if [ ! -f "package.json" ]; then
+            echo "No reactjs/package.json found yet. Add your React app files to enable full scans."
+            exit 0
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci || npm install
+
+      - name: Dependency audit
+        shell: bash
+        run: npm audit --audit-level=moderate || true
+
+      - name: Upload basic report
+        if: always()
+        run: |
+          mkdir -p reports
+          cat > reports/summary.md <<'EOF'
+          # ReactJS DevSecOps Summary
+          - Pipeline executed.
+          - Add React source + tests to enable full SAST/SCA/DAST stages.
+          EOF
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reactjs-devsecops-reports
+          path: reactjs/reports

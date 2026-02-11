@@ -4,9 +4,15 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "python/**"
+      - ".github/workflows/python-codeql.yml"
   pull_request:
     branches:
       - main
+    paths:
+      - "python/**"
+      - ".github/workflows/python-codeql.yml"
   workflow_dispatch:
 
 permissions:
@@ -59,7 +65,7 @@ jobs:
             echo ""
             echo "- Language: \`${{ matrix.language }}\`"
             echo "- Result: uploaded to GitHub Code Scanning (Security tab)"
-            echo "- Scope: repository files (includes \`python/pygoat_flat\` paths)"
+            echo "- Scope: repository files under \`python/\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload CodeQL summary artifact

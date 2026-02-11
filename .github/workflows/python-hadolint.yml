@@ -12,9 +12,15 @@ name: Hadolint
 on:
   push:
     branches: [ main ]
+    paths:
+      - "python/**"
+      - ".github/workflows/python-hadolint.yml"
   pull_request:
     # The branches below must be a subset of the branches above
     branches: [ main ]
+    paths:
+      - "python/**"
+      - ".github/workflows/python-hadolint.yml"
 
 
 permissions:
@@ -34,14 +40,10 @@ jobs:
         id: dockerfile
         shell: bash
         run: |
-          if [ -f "python/pygoat_flat/Dockerfile" ]; then
-            echo "path=python/pygoat_flat/Dockerfile" >> "$GITHUB_OUTPUT"
-          elif [ -f "python/pygoat/Dockerfile" ]; then
-            echo "path=python/pygoat/Dockerfile" >> "$GITHUB_OUTPUT"
-          elif [ -f "Dockerfile" ]; then
-            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
+          if [ -f "python/Dockerfile" ]; then
+            echo "path=python/Dockerfile" >> "$GITHUB_OUTPUT"
           else
-            echo "No Dockerfile found"
+            echo "No python/Dockerfile found"
             exit 1
           fi
 

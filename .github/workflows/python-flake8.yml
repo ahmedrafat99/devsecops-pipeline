@@ -6,8 +6,14 @@ name: Flake8
 on:
   push:
     branches: [ main ]
+    paths:
+      - "python/**"
+      - ".github/workflows/python-flake8.yml"
   pull_request:
     branches: [ main ]
+    paths:
+      - "python/**"
+      - ".github/workflows/python-flake8.yml"
 
 jobs:
   build:
@@ -20,12 +26,11 @@ jobs:
       id: project
       shell: bash
       run: |
-        if [ -f "python/pygoat_flat/manage.py" ]; then
-          echo "dir=python/pygoat_flat" >> "$GITHUB_OUTPUT"
-        elif [ -f "python/pygoat/manage.py" ]; then
-          echo "dir=python/pygoat" >> "$GITHUB_OUTPUT"
+        if [ -f "python/manage.py" ]; then
+          echo "dir=python" >> "$GITHUB_OUTPUT"
         else
-          echo "dir=." >> "$GITHUB_OUTPUT"
+          echo "Could not find python/manage.py"
+          exit 1
         fi
     - name: Set up Python 3.11
       uses: actions/setup-python@v5

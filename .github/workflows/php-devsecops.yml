@@ -1,0 +1,66 @@
+name: PHP DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "php/**"
+      - ".github/workflows/php-devsecops.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "php/**"
+      - ".github/workflows/php-devsecops.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  php-devsecops:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: php
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate PHP project presence
+        shell: bash
+        run: |
+          if [ ! -f "composer.json" ]; then
+            echo "No php/composer.json found yet. Add your PHP app files to enable full scans."
+            exit 0
+          fi
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          tools: composer
+
+      - name: Install dependencies
+        shell: bash
+        run: composer install --no-interaction --prefer-dist || true
+
+      - name: Dependency audit
+        shell: bash
+        run: composer audit || true
+
+      - name: Upload basic report
+        if: always()
+        run: |
+          mkdir -p reports
+          cat > reports/summary.md <<'EOF'
+          # PHP DevSecOps Summary
+          - Pipeline executed.
+          - Add PHP source + tests to enable full SAST/SCA/DAST stages.
+          EOF
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-devsecops-reports
+          path: php/reports

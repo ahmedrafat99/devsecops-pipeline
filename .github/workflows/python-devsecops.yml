@@ -4,9 +4,15 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "python/**"
+      - ".github/workflows/python-devsecops.yml"
   pull_request:
     branches:
       - main
+    paths:
+      - "python/**"
+      - ".github/workflows/python-devsecops.yml"
   workflow_dispatch:
 
 permissions:
@@ -25,14 +31,10 @@ jobs:
         id: project
         shell: bash
         run: |
-          if [ -f "python/pygoat_flat/manage.py" ]; then
-            echo "dir=python/pygoat_flat" >> "$GITHUB_OUTPUT"
-          elif [ -f "python/pygoat/manage.py" ]; then
-            echo "dir=python/pygoat" >> "$GITHUB_OUTPUT"
-          elif [ -f "manage.py" ]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
+          if [ -f "python/manage.py" ]; then
+            echo "dir=python" >> "$GITHUB_OUTPUT"
           else
-            echo "Could not find manage.py in expected locations"
+            echo "Could not find python/manage.py"
             exit 1
           fi
 
