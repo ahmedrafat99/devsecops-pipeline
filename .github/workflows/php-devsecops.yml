@@ -20,19 +20,21 @@ jobs:
   php-devsecops:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: php
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Validate PHP project presence
+      - name: Detect PHP project directory
+        id: project
         shell: bash
         run: |
-          if [ ! -f "composer.json" ]; then
-            echo "No php/composer.json found yet. Add your PHP app files to enable full scans."
-            exit 0
+          if [ -f "php/VulnerableApp-php/composer.json" ]; then
+            echo "dir=php/VulnerableApp-php" >> "$GITHUB_OUTPUT"
+          elif [ -f "php/composer.json" ]; then
+            echo "dir=php" >> "$GITHUB_OUTPUT"
+          else
+            echo "No composer.json found under php/."
+            exit 1
           fi
 
       - name: Set up PHP
@@ -43,24 +45,34 @@ jobs:
 
       - name: Install dependencies
         shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
         run: composer install --no-interaction --prefer-dist || true
 
       - name: Dependency audit
         shell: bash
-        run: composer audit || true
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          mkdir -p reports
+          composer audit --format json > reports/composer-audit.json || true
+          composer audit > reports/composer-audit.txt || true
 
-      - name: Upload basic report
+      - name: Build summary
         if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
         run: |
           mkdir -p reports
           cat > reports/summary.md <<'EOF'
           # PHP DevSecOps Summary
-          - Pipeline executed.
-          - Add PHP source + tests to enable full SAST/SCA/DAST stages.
+          - Pipeline executed in detected directory.
+          - Composer dependency audit completed (see files below).
+          - Add SAST/DAST tools in next step for full coverage.
           EOF
+          ls -1 reports >> reports/summary.md
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: php-devsecops-reports
-          path: php/reports
+          path: ${{ steps.project.outputs.dir }}/reports
