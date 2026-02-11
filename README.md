@@ -6,7 +6,7 @@ Each project has its own CI/CD security workflows and does not depend on the oth
 ## Projects
 
 - `python/`: Python/Django project (PyGoat-based) with dedicated DevSecOps and CodeQL workflows.
-- `php/`: PHP project area with dedicated DevSecOps and CodeQL workflows.
+- `php/`: PHP project area with a dedicated DevSecOps workflow.
 - `reactjs/`: ReactJS project area with dedicated DevSecOps and CodeQL workflows.
 
 ## Workflow Isolation

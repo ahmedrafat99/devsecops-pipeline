@@ -15,6 +15,8 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  security-events: write
 
 jobs:
   php-devsecops:
@@ -37,38 +39,236 @@ jobs:
             exit 1
           fi
 
+      - name: Create report directory
+        shell: bash
+        run: mkdir -p "${{ steps.project.outputs.dir }}/reports"
+
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
           tools: composer
 
+      - name: Secrets scan - Gitleaks (SARIF)
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" zricethezav/gitleaks:latest detect \
+            --source="/repo/${{ steps.project.outputs.dir }}" \
+            --report-format sarif \
+            --report-path "/repo/${{ steps.project.outputs.dir }}/reports/gitleaks.sarif" \
+            --exit-code 0
+        continue-on-error: true
+
+      - name: Secrets scan - TruffleHog (JSON)
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/pwd" trufflesecurity/trufflehog:latest filesystem \
+            --directory=/pwd/${{ steps.project.outputs.dir }} \
+            --json \
+            > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
+        continue-on-error: true
+
       - name: Install dependencies
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: composer install --no-interaction --prefer-dist || true
 
-      - name: Dependency audit
+      - name: SCA - Composer audit
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          mkdir -p reports
           composer audit --format json > reports/composer-audit.json || true
           composer audit > reports/composer-audit.txt || true
+        continue-on-error: true
+
+      - name: Lint - PHP syntax
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          find . -type f -name "*.php" -print0 | xargs -0 -I{} php -l "{}" > reports/php-lint.txt 2>&1 || true
+        continue-on-error: true
+
+      - name: SAST - Semgrep (SARIF)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip semgrep
+          semgrep scan --config auto --sarif --output "${{ steps.project.outputs.dir }}/reports/semgrep.sarif" "${{ steps.project.outputs.dir }}"
+        continue-on-error: true
+
+      - name: SCA - Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ steps.project.outputs.dir }}
+          vuln-type: library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
+        continue-on-error: true
+
+      - name: Build Docker image
+        shell: bash
+        run: docker build -t vulnerable-php:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
+        continue-on-error: true
+
+      - name: Container scan - Trivy image (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: vulnerable-php:ci
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
+        continue-on-error: true
+
+      - name: Start app container for DAST
+        shell: bash
+        run: |
+          docker network create zap-net || true
+          docker run -d --name php-app -p 8080:80 --network zap-net vulnerable-php:ci
+          for i in {1..45}; do
+            if docker run --rm --network zap-net curlimages/curl:8.10.1 -fsS http://php-app/ > /dev/null; then
+              echo "PHP app is reachable for ZAP."
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs php-app || true
+          exit 1
+        continue-on-error: true
+
+      - name: DAST - OWASP ZAP baseline scan
+        shell: bash
+        run: |
+          chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
+          docker run --rm --network zap-net \
+            --user root \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://php-app \
+            -r zap-report.html \
+            -J zap-report.json \
+            -x zap-report.xml \
+            -w zap-warnings.md \
+            -I
+        continue-on-error: true
+
+      - name: Normalize ZAP artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          if [ ! -f "$REPORT_DIR/zap-report.html" ]; then
+            echo '<html><body><h1>ZAP report missing</h1></body></html>' > "$REPORT_DIR/zap-report.html"
+          fi
+          if [ ! -f "$REPORT_DIR/zap-report.json" ]; then
+            echo '{"status":"missing","message":"ZAP did not generate JSON report in this run."}' > "$REPORT_DIR/zap-report.json"
+          fi
+          if [ ! -f "$REPORT_DIR/zap-report.xml" ]; then
+            echo '<report status="missing" message="ZAP did not generate XML report in this run."/>' > "$REPORT_DIR/zap-report.xml"
+          fi
+          if [ ! -f "$REPORT_DIR/zap-warnings.md" ]; then
+            echo '# ZAP warnings' > "$REPORT_DIR/zap-warnings.md"
+          fi
+
+      - name: Stop app container
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f php-app || true
+          docker network rm zap-net || true
+
+      - name: Upload SARIF - Semgrep
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/semgrep.sarif
+          category: "/tool:semgrep/language:php"
+        continue-on-error: true
+
+      - name: Upload SARIF - Trivy deps
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
+          category: "/tool:trivy-deps/language:php"
+        continue-on-error: true
+
+      - name: Upload SARIF - Trivy image
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
+          category: "/tool:trivy-image/language:php"
+        continue-on-error: true
+
+      - name: Upload SARIF - Gitleaks
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/gitleaks.sarif
+          category: "/tool:gitleaks/language:php"
+        continue-on-error: true
 
       - name: Build summary
         if: always()
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          mkdir -p reports
-          cat > reports/summary.md <<'EOF'
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_dir = Path("reports")
+          report_dir.mkdir(exist_ok=True)
+
+          def exists(name):
+            p = report_dir / name
+            return p.exists() and p.stat().st_size > 0
+
+          lines = [
+              "# PHP DevSecOps Summary",
+              "",
+              "| Tool | Status |",
+              "|---|---|",
+              f"| Composer audit | {'available' if exists('composer-audit.json') else 'missing'} |",
+              f"| PHP lint | {'available' if exists('php-lint.txt') else 'missing'} |",
+              f"| Semgrep SARIF | {'available' if exists('semgrep.sarif') else 'missing'} |",
+              f"| Trivy deps SARIF | {'available' if exists('trivy-deps.sarif') else 'missing'} |",
+              f"| Trivy image SARIF | {'available' if exists('trivy-image.sarif') else 'missing'} |",
+              f"| Gitleaks SARIF | {'available' if exists('gitleaks.sarif') else 'missing'} |",
+              f"| TruffleHog JSON | {'available' if exists('trufflehog.json') else 'missing'} |",
+              f"| ZAP report JSON | {'available' if exists('zap-report.json') else 'missing'} |",
+              "",
+              "## Files",
+          ]
+          for p in sorted(report_dir.glob("**/*")):
+            if p.is_file():
+              lines.append(f"- `{p.as_posix()}`")
+          (report_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Publish summary to workflow run
+        if: always()
+        shell: bash
+        run: cat "${{ steps.project.outputs.dir }}/reports/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fallback report files
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.json ] || echo '{"status":"missing"}' > reports/trufflehog.json
+          [ -f reports/composer-audit.json ] || echo '{"status":"missing"}' > reports/composer-audit.json
+          [ -f reports/summary.md ] || cat > reports/summary.md <<'EOF'
           # PHP DevSecOps Summary
-          - Pipeline executed in detected directory.
-          - Composer dependency audit completed (see files below).
-          - Add SAST/DAST tools in next step for full coverage.
+          Fallback summary file.
           EOF
-          ls -1 reports >> reports/summary.md
 
       - name: Upload reports
         if: always()
