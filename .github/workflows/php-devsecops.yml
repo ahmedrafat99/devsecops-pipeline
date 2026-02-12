@@ -30,12 +30,21 @@ jobs:
         id: project
         shell: bash
         run: |
-          if [ -f "php/VulnerableApp-php/composer.json" ]; then
+          if [ -d "php/VulnerableApp-php" ]; then
             echo "dir=php/VulnerableApp-php" >> "$GITHUB_OUTPUT"
+            if [ -f "php/VulnerableApp-php/composer.json" ]; then
+              echo "has_composer=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_composer=false" >> "$GITHUB_OUTPUT"
+            fi
           elif [ -f "php/composer.json" ]; then
             echo "dir=php" >> "$GITHUB_OUTPUT"
+            echo "has_composer=true" >> "$GITHUB_OUTPUT"
+          elif [ -d "php" ] && [ -f "php/Dockerfile" -o -f "php/package.json" ]; then
+            echo "dir=php" >> "$GITHUB_OUTPUT"
+            echo "has_composer=false" >> "$GITHUB_OUTPUT"
           else
-            echo "No composer.json found under php/."
+            echo "No recognizable PHP project found under php/."
             exit 1
           fi
 
@@ -69,17 +78,27 @@ jobs:
         continue-on-error: true
 
       - name: Install dependencies
+        if: steps.project.outputs.has_composer == 'true'
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: composer install --no-interaction --prefer-dist || true
 
       - name: SCA - Composer audit
+        if: steps.project.outputs.has_composer == 'true'
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
           composer audit --format json > reports/composer-audit.json || true
           composer audit > reports/composer-audit.txt || true
         continue-on-error: true
+
+      - name: SCA - Composer not present marker
+        if: steps.project.outputs.has_composer != 'true'
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          echo '{"status":"skipped","reason":"composer.json not found in detected php project"}' > reports/composer-audit.json
+          echo "Composer audit skipped: composer.json not found." > reports/composer-audit.txt
 
       - name: Lint - PHP syntax
         shell: bash
