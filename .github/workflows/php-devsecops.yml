@@ -75,6 +75,9 @@ jobs:
             --directory=/pwd/${{ steps.project.outputs.dir }} \
             --json \
             > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
+          if [ ! -s "${{ steps.project.outputs.dir }}/reports/trufflehog.json" ]; then
+            echo "[]" > "${{ steps.project.outputs.dir }}/reports/trufflehog.json"
+          fi
         continue-on-error: true
 
       - name: Install dependencies
@@ -237,34 +240,154 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import re
+          from collections import Counter
           from pathlib import Path
 
           report_dir = Path("reports")
           report_dir.mkdir(exist_ok=True)
+          has_composer = "${{ steps.project.outputs.has_composer }}" == "true"
+          project_dir = "${{ steps.project.outputs.dir }}"
 
-          def exists(name):
+          def text(name: str) -> str:
             p = report_dir / name
-            return p.exists() and p.stat().st_size > 0
+            if not p.exists():
+              return ""
+            return p.read_text(encoding="utf-8", errors="replace")
+
+          def load_json(name: str):
+            raw = text(name)
+            if not raw.strip():
+              return None
+            try:
+              return json.loads(raw)
+            except json.JSONDecodeError:
+              return None
+
+          def parse_sarif(name: str):
+            data = load_json(name)
+            if not data:
+              return {"status": "missing", "total": 0, "levels": {}, "top_rules": []}
+            runs = data.get("runs", [])
+            if not runs:
+              return {"status": "empty", "total": 0, "levels": {}, "top_rules": []}
+            run = runs[0]
+            results = run.get("results", []) or []
+            rules = run.get("tool", {}).get("driver", {}).get("rules", []) or []
+            default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
+            lv = Counter()
+            rule_counts = Counter()
+            for item in results:
+              lvl = item.get("level") or default_level.get(item.get("ruleId")) or "unknown"
+              lv[lvl] += 1
+              rid = item.get("ruleId") or "unknown"
+              rule_counts[rid] += 1
+            return {
+              "status": "ok",
+              "total": len(results),
+              "levels": dict(sorted(lv.items())),
+              "top_rules": rule_counts.most_common(5),
+            }
+
+          def parse_composer():
+            data = load_json("composer-audit.json")
+            if not data:
+              return "missing"
+            if isinstance(data, dict) and data.get("status") == "skipped":
+              return f"skipped ({data.get('reason', 'no reason')})"
+            if isinstance(data, dict):
+              # composer audit can return advisories by package
+              advisories = data.get("advisories", {})
+              if isinstance(advisories, dict):
+                vuln_count = sum(len(v or []) for v in advisories.values())
+                return f"vulnerabilities={vuln_count}; affected_packages={len(advisories)}"
+            return "available (format not recognized)"
+
+          def parse_php_lint():
+            raw = text("php-lint.txt")
+            if not raw:
+              return "missing"
+            errors = len(re.findall(r"Parse error|Fatal error", raw))
+            ok = len(re.findall(r"No syntax errors detected", raw))
+            return f"files_checked={ok}; parse_errors={errors}"
+
+          def parse_trufflehog():
+            raw = text("trufflehog.json")
+            if raw == "":
+              return "missing"
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+            # trufflehog JSON output is newline-delimited objects when findings exist
+            if len(lines) == 1 and lines[0] == "[]":
+              return "findings=0"
+            findings = 0
+            for ln in lines:
+              try:
+                obj = json.loads(ln)
+                if isinstance(obj, list):
+                  findings += len(obj)
+                elif isinstance(obj, dict):
+                  findings += 1
+              except json.JSONDecodeError:
+                pass
+            return f"findings={findings}"
+
+          def parse_zap():
+            data = load_json("zap-report.json")
+            if not data:
+              return "missing"
+            if isinstance(data, dict) and data.get("status") == "missing":
+              return f"missing ({data.get('message', 'no message')})"
+            if not isinstance(data, dict):
+              return "available (unexpected format)"
+            sites = data.get("site", []) or []
+            risk_map = {"0": "info", "1": "low", "2": "medium", "3": "high"}
+            levels = Counter()
+            alert_types = 0
+            instances_total = 0
+            for site in sites:
+              alerts = site.get("alerts", []) or []
+              alert_types += len(alerts)
+              for a in alerts:
+                risk = risk_map.get(str(a.get("riskcode", "")), "unknown")
+                inst = a.get("instances", []) or []
+                n = len(inst) if inst else 1
+                levels[risk] += n
+                instances_total += n
+            levels_text = ", ".join(f"{k}:{v}" for k, v in sorted(levels.items())) if levels else "-"
+            return f"alerts={alert_types}; instances={instances_total}; levels={levels_text}"
+
+          semgrep = parse_sarif("semgrep.sarif")
+          trivy_deps = parse_sarif("trivy-deps.sarif")
+          trivy_image = parse_sarif("trivy-image.sarif")
+          gitleaks = parse_sarif("gitleaks.sarif")
+
+          def sarif_line(name: str, obj: dict) -> str:
+            levels = ", ".join(f"{k}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
+            top_rules = ", ".join(f"{r}:{c}" for r, c in obj["top_rules"]) if obj["top_rules"] else "-"
+            return f"{name}: status={obj['status']}; findings={obj['total']}; levels={levels}; top_rules={top_rules}"
 
           lines = [
               "# PHP DevSecOps Summary",
               "",
-              "| Tool | Status |",
+              f"- Project directory: `{project_dir}`",
+              f"- Composer file detected: `{has_composer}`",
+              "",
+              "| Tool | Detailed Result |",
               "|---|---|",
-              f"| Composer audit | {'available' if exists('composer-audit.json') else 'missing'} |",
-              f"| PHP lint | {'available' if exists('php-lint.txt') else 'missing'} |",
-              f"| Semgrep SARIF | {'available' if exists('semgrep.sarif') else 'missing'} |",
-              f"| Trivy deps SARIF | {'available' if exists('trivy-deps.sarif') else 'missing'} |",
-              f"| Trivy image SARIF | {'available' if exists('trivy-image.sarif') else 'missing'} |",
-              f"| Gitleaks SARIF | {'available' if exists('gitleaks.sarif') else 'missing'} |",
-              f"| TruffleHog JSON | {'available' if exists('trufflehog.json') else 'missing'} |",
-              f"| ZAP report JSON | {'available' if exists('zap-report.json') else 'missing'} |",
+              f"| Composer audit | {parse_composer()} |",
+              f"| PHP lint | {parse_php_lint()} |",
+              f"| Semgrep (SARIF) | {sarif_line('semgrep', semgrep)} |",
+              f"| Trivy deps (SARIF) | {sarif_line('trivy-deps', trivy_deps)} |",
+              f"| Trivy image (SARIF) | {sarif_line('trivy-image', trivy_image)} |",
+              f"| Gitleaks (SARIF) | {sarif_line('gitleaks', gitleaks)} |",
+              f"| TruffleHog (JSON) | {parse_trufflehog()} |",
+              f"| OWASP ZAP (JSON) | {parse_zap()} |",
               "",
               "## Files",
           ]
           for p in sorted(report_dir.glob("**/*")):
             if p.is_file():
-              lines.append(f"- `{p.as_posix()}`")
+              lines.append(f"- `{p.as_posix()}` ({p.stat().st_size} bytes)")
           (report_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
