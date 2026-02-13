@@ -1,16 +1,22 @@
 # ReactJS Project
 
-This directory is reserved for the standalone ReactJS security pipeline project.
+This directory contains the standalone ReactJS security pipeline project:
+
+- `reactjs/CVE-2025-55182` (cloned from `https://github.com/l4rm4nd/CVE-2025-55182.git`)
 
 ## Workflows
 
 - `.github/workflows/reactjs-devsecops.yml`
 - `.github/workflows/reactjs-codeql.yml`
 
-## Planned Tools
+## Implemented Tools (DevSecOps)
 
 - SCA: `npm audit`, `trivy fs`
-- SAST: `semgrep`, `eslint`
-- DAST: `OWASP ZAP` (when a runnable React web target is added)
+- SAST: `semgrep`
+- DAST: `OWASP ZAP baseline`
 - Secrets: `gitleaks`, `trufflehog`
-- Container scan: `trivy image` (when Dockerfile/image is added)
+- Container scan: `trivy image`
+
+## CodeQL Support
+
+CodeQL supports JavaScript/TypeScript, so `reactjs-codeql.yml` is enabled for this project.

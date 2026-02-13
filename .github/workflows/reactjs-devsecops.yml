@@ -15,24 +15,28 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  security-events: write
 
 jobs:
   reactjs-devsecops:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: reactjs
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Validate React project presence
+      - name: Detect React project directory
+        id: project
         shell: bash
         run: |
-          if [ ! -f "package.json" ]; then
-            echo "No reactjs/package.json found yet. Add your React app files to enable full scans."
-            exit 0
+          if [ -f "reactjs/CVE-2025-55182/package.json" ]; then
+            echo "dir=reactjs/CVE-2025-55182" >> "$GITHUB_OUTPUT"
+          elif [ -f "reactjs/package.json" ]; then
+            echo "dir=reactjs" >> "$GITHUB_OUTPUT"
+          else
+            echo "No React package.json found under reactjs/."
+            exit 1
           fi
 
       - name: Set up Node.js
@@ -40,26 +44,331 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Create report directory
+        run: mkdir -p "${{ steps.project.outputs.dir }}/reports"
+
+      - name: Secrets scan - Gitleaks (SARIF)
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" zricethezav/gitleaks:latest detect \
+            --source="/repo/${{ steps.project.outputs.dir }}" \
+            --report-format sarif \
+            --report-path "/repo/${{ steps.project.outputs.dir }}/reports/gitleaks.sarif" \
+            --exit-code 0
+        continue-on-error: true
+
+      - name: Secrets scan - TruffleHog (JSON)
+        shell: bash
+        run: |
+          docker run --rm -v "${GITHUB_WORKSPACE}:/pwd" trufflesecurity/trufflehog:latest filesystem \
+            --directory=/pwd/${{ steps.project.outputs.dir }} \
+            --json \
+            > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
+          if [ ! -s "${{ steps.project.outputs.dir }}/reports/trufflehog.json" ]; then
+            echo "[]" > "${{ steps.project.outputs.dir }}/reports/trufflehog.json"
+          fi
+        continue-on-error: true
+
       - name: Install dependencies
         shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
         run: npm ci || npm install
+        continue-on-error: true
 
-      - name: Dependency audit
+      - name: SCA - npm audit
         shell: bash
-        run: npm audit --audit-level=moderate || true
-
-      - name: Upload basic report
-        if: always()
+        working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          mkdir -p reports
-          cat > reports/summary.md <<'EOF'
+          npm audit --json > reports/npm-audit.json || true
+          npm audit --audit-level=low > reports/npm-audit.txt || true
+          if [ ! -s reports/npm-audit.json ]; then
+            echo '{"status":"missing","message":"npm audit JSON output was not generated"}' > reports/npm-audit.json
+          fi
+        continue-on-error: true
+
+      - name: SAST - Semgrep (SARIF)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip semgrep
+          semgrep scan --config auto --sarif --output "${{ steps.project.outputs.dir }}/reports/semgrep.sarif" "${{ steps.project.outputs.dir }}"
+        continue-on-error: true
+
+      - name: SCA - Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ steps.project.outputs.dir }}
+          vuln-type: library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
+        continue-on-error: true
+
+      - name: Build Docker image
+        run: docker build -t reactjs-app:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
+        continue-on-error: true
+
+      - name: Container scan - Trivy image (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: reactjs-app:ci
+          vuln-type: os,library
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
+        continue-on-error: true
+
+      - name: Start app container for DAST
+        shell: bash
+        run: |
+          docker network create zap-net || true
+          docker run -d --name reactjs-app --network zap-net -p 3000:3000 reactjs-app:ci
+          for i in {1..60}; do
+            if docker run --rm --network zap-net curlimages/curl:8.10.1 -fsS http://reactjs-app:3000/ > /dev/null; then
+              echo "React app is reachable for ZAP."
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs reactjs-app || true
+          exit 1
+        continue-on-error: true
+
+      - name: DAST - OWASP ZAP baseline scan
+        shell: bash
+        run: |
+          chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
+          docker run --rm --network zap-net \
+            --user root \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://reactjs-app:3000 \
+            -r zap-report.html \
+            -J zap-report.json \
+            -x zap-report.xml \
+            -w zap-warnings.md \
+            -I
+        continue-on-error: true
+
+      - name: Normalize ZAP artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          if [ ! -f "$REPORT_DIR/zap-report.html" ]; then
+            echo '<html><body><h1>ZAP report missing</h1></body></html>' > "$REPORT_DIR/zap-report.html"
+          fi
+          if [ ! -f "$REPORT_DIR/zap-report.json" ]; then
+            echo '{"status":"missing","message":"ZAP did not generate JSON report in this run."}' > "$REPORT_DIR/zap-report.json"
+          fi
+          if [ ! -f "$REPORT_DIR/zap-report.xml" ]; then
+            echo '<report status="missing" message="ZAP did not generate XML report in this run."/>' > "$REPORT_DIR/zap-report.xml"
+          fi
+          if [ ! -f "$REPORT_DIR/zap-warnings.md" ]; then
+            echo '# ZAP warnings' > "$REPORT_DIR/zap-warnings.md"
+          fi
+
+      - name: Stop app container
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f reactjs-app || true
+          docker network rm zap-net || true
+
+      - name: Upload SARIF - Semgrep
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/semgrep.sarif
+          category: "/tool:semgrep/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - Trivy deps
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
+          category: "/tool:trivy-deps/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - Trivy image
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
+          category: "/tool:trivy-image/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - Gitleaks
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/gitleaks.sarif
+          category: "/tool:gitleaks/language:javascript"
+        continue-on-error: true
+
+      - name: Build detailed summary
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+
+          report_dir = Path("reports")
+          report_dir.mkdir(exist_ok=True)
+          project_dir = "${{ steps.project.outputs.dir }}"
+
+          def read(name: str) -> str:
+            p = report_dir / name
+            if not p.exists():
+              return ""
+            return p.read_text(encoding="utf-8", errors="replace")
+
+          def load_json(name: str):
+            raw = read(name)
+            if not raw.strip():
+              return None
+            try:
+              return json.loads(raw)
+            except json.JSONDecodeError:
+              return None
+
+          def parse_sarif(name: str):
+            data = load_json(name)
+            if not data:
+              return {"status": "missing", "total": 0, "levels": {}, "top_rules": []}
+            runs = data.get("runs", [])
+            if not runs:
+              return {"status": "empty", "total": 0, "levels": {}, "top_rules": []}
+            run = runs[0]
+            results = run.get("results", []) or []
+            rules = run.get("tool", {}).get("driver", {}).get("rules", []) or []
+            default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
+            lv = Counter()
+            rc = Counter()
+            for r in results:
+              lvl = r.get("level") or default_level.get(r.get("ruleId")) or "unknown"
+              lv[lvl] += 1
+              rc[r.get("ruleId") or "unknown"] += 1
+            return {"status": "ok", "total": len(results), "levels": dict(sorted(lv.items())), "top_rules": rc.most_common(5)}
+
+          def sarif_line(label: str, obj: dict) -> str:
+            levels = ", ".join(f"{k}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
+            top = ", ".join(f"{k}:{v}" for k, v in obj["top_rules"]) if obj["top_rules"] else "-"
+            return f"{label}: status={obj['status']}; findings={obj['total']}; levels={levels}; top_rules={top}"
+
+          def parse_npm_audit():
+            data = load_json("npm-audit.json")
+            if not data:
+              return "missing"
+            if isinstance(data, dict) and data.get("status") == "missing":
+              return data.get("message", "missing")
+            vulns = (data or {}).get("metadata", {}).get("vulnerabilities", {})
+            if isinstance(vulns, dict) and vulns:
+              return ", ".join(f"{k}:{v}" for k, v in vulns.items())
+            advisories = (data or {}).get("advisories", {})
+            if isinstance(advisories, dict):
+              return f"advisories={len(advisories)}"
+            return "available"
+
+          def parse_trufflehog():
+            raw = read("trufflehog.json").strip()
+            if not raw:
+              return "missing"
+            if raw == "[]":
+              return "findings=0"
+            findings = 0
+            for ln in [x.strip() for x in raw.splitlines() if x.strip()]:
+              try:
+                obj = json.loads(ln)
+                if isinstance(obj, list):
+                  findings += len(obj)
+                elif isinstance(obj, dict):
+                  findings += 1
+              except json.JSONDecodeError:
+                pass
+            return f"findings={findings}"
+
+          def parse_zap():
+            data = load_json("zap-report.json")
+            if not data:
+              return "missing"
+            if isinstance(data, dict) and data.get("status") == "missing":
+              return f"missing ({data.get('message', 'no message')})"
+            sites = data.get("site", []) if isinstance(data, dict) else []
+            risk_map = {"0": "info", "1": "low", "2": "medium", "3": "high"}
+            levels = Counter()
+            alert_types = 0
+            instances = 0
+            for site in sites:
+              alerts = site.get("alerts", []) or []
+              alert_types += len(alerts)
+              for a in alerts:
+                risk = risk_map.get(str(a.get("riskcode", "")), "unknown")
+                n = len(a.get("instances", []) or [])
+                if n == 0:
+                  n = 1
+                levels[risk] += n
+                instances += n
+            lv = ", ".join(f"{k}:{v}" for k, v in sorted(levels.items())) if levels else "-"
+            return f"alerts={alert_types}; instances={instances}; levels={lv}"
+
+          semgrep = parse_sarif("semgrep.sarif")
+          trivy_deps = parse_sarif("trivy-deps.sarif")
+          trivy_image = parse_sarif("trivy-image.sarif")
+          gitleaks = parse_sarif("gitleaks.sarif")
+
+          lines = [
+            "# ReactJS DevSecOps Summary",
+            "",
+            f"- Project directory: `{project_dir}`",
+            "",
+            "| Tool | Detailed Result |",
+            "|---|---|",
+            f"| npm audit | {parse_npm_audit()} |",
+            f"| Semgrep (SARIF) | {sarif_line('semgrep', semgrep)} |",
+            f"| Trivy deps (SARIF) | {sarif_line('trivy-deps', trivy_deps)} |",
+            f"| Trivy image (SARIF) | {sarif_line('trivy-image', trivy_image)} |",
+            f"| Gitleaks (SARIF) | {sarif_line('gitleaks', gitleaks)} |",
+            f"| TruffleHog (JSON) | {parse_trufflehog()} |",
+            f"| OWASP ZAP (JSON) | {parse_zap()} |",
+            "",
+            "## Files",
+          ]
+          for p in sorted(report_dir.glob("**/*")):
+            if p.is_file():
+              lines.append(f"- `{p.as_posix()}` ({p.stat().st_size} bytes)")
+          (report_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Publish summary to workflow run
+        if: always()
+        shell: bash
+        run: cat "${{ steps.project.outputs.dir }}/reports/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fallback report files
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/npm-audit.json ] || echo '{"status":"missing"}' > reports/npm-audit.json
+          [ -f reports/trufflehog.json ] || echo "[]" > reports/trufflehog.json
+          [ -f reports/summary.md ] || cat > reports/summary.md <<'EOF'
           # ReactJS DevSecOps Summary
-          - Pipeline executed.
-          - Add React source + tests to enable full SAST/SCA/DAST stages.
+          Fallback summary file.
           EOF
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: reactjs-devsecops-reports
-          path: reactjs/reports
+          path: ${{ steps.project.outputs.dir }}/reports
