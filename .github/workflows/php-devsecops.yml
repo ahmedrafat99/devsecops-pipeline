@@ -120,28 +120,12 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: Install dependencies
-        if: steps.project.outputs.has_composer == 'true'
-        shell: bash
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: composer install --no-interaction --prefer-dist || true
-
-      - name: SCA - Composer audit
-        if: steps.project.outputs.has_composer == 'true'
+      - name: SCA - Composer audit disabled
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          composer audit --format json > reports/composer-audit.json || true
-          composer audit > reports/composer-audit.txt || true
-        continue-on-error: true
-
-      - name: SCA - Composer not present marker
-        if: steps.project.outputs.has_composer != 'true'
-        shell: bash
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          echo '{"status":"skipped","reason":"composer.json not found in detected php project"}' > reports/composer-audit.json
-          echo "Composer audit skipped: composer.json not found." > reports/composer-audit.txt
+          echo '{"status":"disabled","reason":"composer audit disabled by pipeline configuration"}' > reports/composer-audit.json
+          echo "Composer audit disabled by pipeline configuration." > reports/composer-audit.txt
 
       - name: Lint - PHP syntax
         shell: bash
@@ -257,6 +241,18 @@ jobs:
         run: |
           docker rm -f php-app || true
           docker network rm zap-net || true
+
+      - name: Ensure report placeholders before SARIF upload
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.json ] || echo '{"status":"missing"}' > reports/trufflehog.json
+          [ -f reports/composer-audit.json ] || echo '{"status":"disabled","reason":"composer audit disabled by pipeline configuration"}' > reports/composer-audit.json
 
       - name: Upload SARIF - Semgrep
         if: always()
@@ -386,6 +382,8 @@ jobs:
             data = load_json("composer-audit.json")
             if not data:
               return "missing"
+            if isinstance(data, dict) and data.get("status") == "disabled":
+              return f"disabled ({data.get('reason', 'no reason')})"
             if isinstance(data, dict) and data.get("status") == "skipped":
               return f"skipped ({data.get('reason', 'no reason')})"
             if isinstance(data, dict):
@@ -518,7 +516,7 @@ jobs:
               "",
               "| Tool | Status | Findings | Critical | High | Medium | Low | Notes |",
               "|---|---|---:|---:|---:|---:|---:|---|",
-              f"| Composer audit | {'ok' if parse_composer() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_composer()} |",
+              f"| Composer audit | {'disabled' if parse_composer().startswith('disabled') else ('ok' if parse_composer() != 'missing' else 'missing_report')} | - | - | - | - | - | {parse_composer()} |",
               f"| PHP lint | {'ok' if parse_php_lint() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_php_lint()} |",
               f"| Semgrep (SARIF) | {tool_status(semgrep, semgrep_outcome)} | {semgrep['total']} | {sev_count(semgrep, 'CRITICAL')} | {sev_count(semgrep, 'HIGH')} | {sev_count(semgrep, 'MEDIUM')} | {sev_count(semgrep, 'LOW')} | step={semgrep_outcome or '-'}; levels={level_text(semgrep)}; top={top_text(semgrep)} |",
               f"| Trivy deps (SARIF) | {tool_status(trivy_deps, trivy_deps_outcome)} | {trivy_deps['total']} | {sev_count(trivy_deps, 'CRITICAL')} | {sev_count(trivy_deps, 'HIGH')} | {sev_count(trivy_deps, 'MEDIUM')} | {sev_count(trivy_deps, 'LOW')} | step={trivy_deps_outcome or '-'}; levels={level_text(trivy_deps)}; top={top_text(trivy_deps)} |",

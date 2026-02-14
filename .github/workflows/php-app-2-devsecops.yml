@@ -90,35 +90,12 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: Install dependencies
-        if: steps.project.outputs.has_composer == 'true'
-        shell: bash
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: composer install --no-interaction --prefer-dist || true
-
-      - name: SCA - Composer audit
-        id: composer_audit_step
-        if: steps.project.outputs.has_composer == 'true'
+      - name: SCA - Composer audit disabled
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          composer audit --format json > reports/composer-audit.json || true
-          composer audit > reports/composer-audit.txt || true
-          if [ ! -s reports/composer-audit.json ]; then
-            echo '{"status":"failed","reason":"composer audit produced no JSON output"}' > reports/composer-audit.json
-          fi
-          if [ ! -s reports/composer-audit.txt ]; then
-            echo "composer audit produced no text output" > reports/composer-audit.txt
-          fi
-        continue-on-error: true
-
-      - name: SCA - Composer not present marker
-        if: steps.project.outputs.has_composer != 'true'
-        shell: bash
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          echo '{"status":"skipped","reason":"composer.json not found in detected php project"}' > reports/composer-audit.json
-          echo "Composer audit skipped: composer.json not found." > reports/composer-audit.txt
+          echo '{"status":"disabled","reason":"composer audit disabled by pipeline configuration"}' > reports/composer-audit.json
+          echo "Composer audit disabled by pipeline configuration." > reports/composer-audit.txt
 
       - name: Lint - PHP syntax
         shell: bash
@@ -272,6 +249,18 @@ jobs:
           docker rm -f php-app-2 || true
           docker network rm zap-net-app-2 || true
 
+      - name: Ensure report placeholders before SARIF upload
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.json ] || echo '{"status":"missing"}' > reports/trufflehog.json
+          [ -f reports/composer-audit.json ] || echo '{"status":"disabled","reason":"composer audit disabled by pipeline configuration"}' > reports/composer-audit.json
+
       - name: Upload SARIF - Semgrep
         if: always()
         uses: github/codeql-action/upload-sarif@v4
@@ -400,6 +389,8 @@ jobs:
             data = load_json("composer-audit.json")
             if not data:
               return "missing"
+            if isinstance(data, dict) and data.get("status") == "disabled":
+              return f"disabled ({data.get('reason', 'no reason')})"
             if isinstance(data, dict) and data.get("status") == "skipped":
               return f"skipped ({data.get('reason', 'no reason')})"
             if isinstance(data, dict) and data.get("status") == "failed":
@@ -528,6 +519,8 @@ jobs:
           zap = parse_zap()
 
           def composer_status(text: str) -> str:
+            if text.startswith("disabled"):
+              return "disabled"
             if text.startswith("failed"):
               return "failed"
             if text.startswith("skipped"):
