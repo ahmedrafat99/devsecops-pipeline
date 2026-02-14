@@ -128,15 +128,30 @@ jobs:
           APP_IMAGE_ID="$(docker compose images -q app | head -n1)"
           if [ -n "$APP_IMAGE_ID" ]; then
             docker tag "$APP_IMAGE_ID" vulnerable-php-app-2:ci
+            docker image inspect vulnerable-php-app-2:ci >/dev/null
           else
             echo "Could not resolve compose app image ID."
             exit 1
           fi
         continue-on-error: true
 
+      - name: Resolve image readiness
+        id: image_ready_step
+        if: always()
+        shell: bash
+        env:
+          BUILD_IMAGE_OUTCOME: ${{ steps.build_image_step.outcome }}
+          BUILD_COMPOSE_OUTCOME: ${{ steps.build_compose_image_step.outcome }}
+        run: |
+          if [ "$BUILD_IMAGE_OUTCOME" = "success" ] || [ "$BUILD_COMPOSE_OUTCOME" = "success" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Container scan - Trivy image (SARIF)
         id: trivy_image_step
-        if: steps.build_image_step.outcome == 'success' || steps.build_compose_image_step.outcome == 'success'
+        if: steps.image_ready_step.outputs.ready == 'true'
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: vulnerable-php-app-2:ci
