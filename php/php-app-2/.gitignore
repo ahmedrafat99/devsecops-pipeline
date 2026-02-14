@@ -1,0 +1,4 @@
+/vendor/
+/.idea
+/debug
+composer.lock

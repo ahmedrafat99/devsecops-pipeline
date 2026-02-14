@@ -1,0 +1,41 @@
+{
+    "name": "angelej/php-insider",
+    "authors": [
+        {
+            "name": "Jeremy Angele",
+            "email": "jeremy.angele@proton.me"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "ext-dom": "*",
+        "ext-simplexml": "*",
+        "ext-xml": "*",
+        "ext-tokenizer": "*",
+        "ext-xmlwriter": "*",
+        "nikic/php-parser": "^5.0.2",
+        "symfony/console": "^v7.4.1",
+        "nunomaduro/termwind": "^2.0.1"
+    },
+    "require-dev": {
+        "pestphp/pest": "^4.2",
+        "phpstan/phpstan": "^2.1",
+        "laravel/pint": "^1.26"
+    },
+    "autoload": {
+        "psr-4": {
+            "Angelej\\PhpInsider\\": "src/"
+        }
+    },
+    "bin": [
+        "bin/insider"
+    ],
+    "scripts": {
+        "test": "./vendor/bin/pest"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}

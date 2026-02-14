@@ -1,16 +1,16 @@
-name: PHP DevSecOps Pipeline
+name: PHP App 2 DevSecOps Pipeline
 
 on:
   push:
     branches: [main]
     paths:
-      - "php/VulnerableApp-php/**"
-      - ".github/workflows/php-devsecops.yml"
+      - "php/php-app-2/**"
+      - ".github/workflows/php-app-2-devsecops.yml"
   pull_request:
     branches: [main]
     paths:
-      - "php/VulnerableApp-php/**"
-      - ".github/workflows/php-devsecops.yml"
+      - "php/php-app-2/**"
+      - ".github/workflows/php-app-2-devsecops.yml"
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ permissions:
   security-events: write
 
 jobs:
-  php-devsecops:
+  php-app-2-devsecops:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -30,21 +30,18 @@ jobs:
         id: project
         shell: bash
         run: |
-          if [ -d "php/VulnerableApp-php" ]; then
-            echo "dir=php/VulnerableApp-php" >> "$GITHUB_OUTPUT"
-            if [ -f "php/VulnerableApp-php/composer.json" ]; then
+          if [ -d "php/php-app-2" ]; then
+            echo "dir=php/php-app-2" >> "$GITHUB_OUTPUT"
+            if [ -f "php/php-app-2/composer.json" ]; then
               echo "has_composer=true" >> "$GITHUB_OUTPUT"
             else
               echo "has_composer=false" >> "$GITHUB_OUTPUT"
             fi
-          elif [ -f "php/composer.json" ]; then
-            echo "dir=php" >> "$GITHUB_OUTPUT"
+          elif [ -f "php/php-app-2/composer.json" ]; then
+            echo "dir=php/php-app-2" >> "$GITHUB_OUTPUT"
             echo "has_composer=true" >> "$GITHUB_OUTPUT"
-          elif [ -d "php" ] && [ -f "php/Dockerfile" -o -f "php/package.json" ]; then
-            echo "dir=php" >> "$GITHUB_OUTPUT"
-            echo "has_composer=false" >> "$GITHUB_OUTPUT"
           else
-            echo "No recognizable PHP project found under php/."
+            echo "No recognizable PHP App 2 project found under php/php-app-2."
             exit 1
           fi
 
@@ -130,13 +127,13 @@ jobs:
 
       - name: Build Docker image
         shell: bash
-        run: docker build -t vulnerable-php:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
+        run: docker build -t vulnerable-php-app-2:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
         continue-on-error: true
 
       - name: Container scan - Trivy image (SARIF)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: vulnerable-php:ci
+          image-ref: vulnerable-php-app-2:ci
           vuln-type: os,library
           severity: CRITICAL,HIGH,MEDIUM
           format: sarif
@@ -146,16 +143,16 @@ jobs:
       - name: Start app container for DAST
         shell: bash
         run: |
-          docker network create zap-net || true
-          docker run -d --name php-app -p 8080:80 --network zap-net vulnerable-php:ci
+          docker network create zap-net-app-2 || true
+          docker run -d --name php-app-2 -p 8080:80 --network zap-net-app-2 vulnerable-php-app-2:ci
           for i in {1..45}; do
-            if docker run --rm --network zap-net curlimages/curl:8.10.1 -fsS http://php-app/ > /dev/null; then
+            if docker run --rm --network zap-net-app-2 curlimages/curl:8.10.1 -fsS http://php-app-2/ > /dev/null; then
               echo "PHP app is reachable for ZAP."
               exit 0
             fi
             sleep 2
           done
-          docker logs php-app || true
+          docker logs php-app-2 || true
           exit 1
         continue-on-error: true
 
@@ -163,11 +160,11 @@ jobs:
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
-          docker run --rm --network zap-net \
+          docker run --rm --network zap-net-app-2 \
             --user root \
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-            -t http://php-app \
+            -t http://php-app-2 \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
@@ -198,15 +195,15 @@ jobs:
         if: always()
         shell: bash
         run: |
-          docker rm -f php-app || true
-          docker network rm zap-net || true
+          docker rm -f php-app-2 || true
+          docker network rm zap-net-app-2 || true
 
       - name: Upload SARIF - Semgrep
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.project.outputs.dir }}/reports/semgrep.sarif
-          category: "/tool:semgrep/language:php"
+          category: "/app:php-app-2/tool:semgrep/language:php"
         continue-on-error: true
 
       - name: Upload SARIF - Trivy deps
@@ -214,7 +211,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
-          category: "/tool:trivy-deps/language:php"
+          category: "/app:php-app-2/tool:trivy-deps/language:php"
         continue-on-error: true
 
       - name: Upload SARIF - Trivy image
@@ -222,7 +219,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
-          category: "/tool:trivy-image/language:php"
+          category: "/app:php-app-2/tool:trivy-image/language:php"
         continue-on-error: true
 
       - name: Upload SARIF - Gitleaks
@@ -230,7 +227,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.project.outputs.dir }}/reports/gitleaks.sarif
-          category: "/tool:gitleaks/language:php"
+          category: "/app:php-app-2/tool:gitleaks/language:php"
         continue-on-error: true
 
       - name: Build summary
@@ -471,5 +468,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: php-devsecops-reports
+          name: php-app-2-devsecops-reports
           path: ${{ steps.project.outputs.dir }}/reports
