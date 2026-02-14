@@ -275,11 +275,24 @@ jobs:
             results = run.get("results", []) or []
             rules = run.get("tool", {}).get("driver", {}).get("rules", []) or []
             default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
+            # Prefer tool-provided severity tags when available (e.g., Trivy).
+            severity_by_rule = {}
+            for rule in rules:
+              rid = rule.get("id")
+              tags = rule.get("properties", {}).get("tags", []) or []
+              sev = None
+              for t in tags:
+                tt = str(t).upper()
+                if tt in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
+                  sev = tt
+                  break
+              if rid and sev:
+                severity_by_rule[rid] = sev
             lv = Counter()
             sev = Counter()
             level_to_sev = {
-              "error": "HIGH",
-              "warning": "MEDIUM",
+              "error": "VERY_HIGH",
+              "warning": "HIGH",
               "note": "LOW",
               "none": "LOW",
             }
@@ -287,7 +300,12 @@ jobs:
             for item in results:
               lvl = item.get("level") or default_level.get(item.get("ruleId")) or "unknown"
               lv[lvl] += 1
-              sev[level_to_sev.get(str(lvl).lower(), "UNKNOWN")] += 1
+              rid = item.get("ruleId")
+              tool_sev = severity_by_rule.get(rid)
+              if tool_sev:
+                sev[tool_sev] += 1
+              else:
+                sev[level_to_sev.get(str(lvl).lower(), "LOW")] += 1
               rid = item.get("ruleId") or "unknown"
               rule_counts[rid] += 1
             return {
@@ -363,7 +381,15 @@ jobs:
                 levels[risk] += n
                 instances_total += n
             levels_text = ", ".join(f"{k}:{v}" for k, v in sorted(levels.items())) if levels else "-"
-            return f"alerts={alert_types}; instances={instances_total}; levels={levels_text}"
+            # Normalize ZAP risk levels to the requested five-band scale.
+            normalized = Counter()
+            normalized["HIGH"] += levels.get("high", 0)
+            normalized["MEDIUM"] += levels.get("medium", 0)
+            normalized["LOW"] += levels.get("low", 0) + levels.get("info", 0) + levels.get("unknown", 0)
+            ntext = ", ".join(
+              f"{k}:{normalized[k]}" for k in ["CRITICAL", "VERY_HIGH", "HIGH", "MEDIUM", "LOW"] if normalized.get(k, 0) > 0
+            ) or "-"
+            return f"alerts={alert_types}; instances={instances_total}; levels={levels_text}; normalized={ntext}"
 
           semgrep = parse_sarif("semgrep.sarif")
           trivy_deps = parse_sarif("trivy-deps.sarif")
@@ -372,7 +398,7 @@ jobs:
 
           def sarif_line(name: str, obj: dict) -> str:
             levels = ", ".join(f"{k}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
-            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+            order = ["CRITICAL", "VERY_HIGH", "HIGH", "MEDIUM", "LOW"]
             severities = ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj.get("severities", {})) or "-"
             top_rules = ", ".join(f"{r}:{c}" for r, c in obj["top_rules"]) if obj["top_rules"] else "-"
             return f"{name}: status={obj['status']}; findings={obj['total']}; levels={levels}; severities={severities}; top_rules={top_rules}"
