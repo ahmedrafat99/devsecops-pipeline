@@ -32,6 +32,7 @@ jobs:
         run: |
           if [ -d "php/VulnerableApp-php" ]; then
             echo "dir=php/VulnerableApp-php" >> "$GITHUB_OUTPUT"
+            echo "project_found=true" >> "$GITHUB_OUTPUT"
             if [ -f "php/VulnerableApp-php/composer.json" ]; then
               echo "has_composer=true" >> "$GITHUB_OUTPUT"
             else
@@ -42,8 +43,22 @@ jobs:
             else
               echo "supports_dast=false" >> "$GITHUB_OUTPUT"
             fi
+          elif [ -d "php/php-app-2" ]; then
+            echo "dir=php/php-app-2" >> "$GITHUB_OUTPUT"
+            echo "project_found=true" >> "$GITHUB_OUTPUT"
+            if [ -f "php/php-app-2/composer.json" ]; then
+              echo "has_composer=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_composer=false" >> "$GITHUB_OUTPUT"
+            fi
+            if [ -f "php/php-app-2/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/php-app-2/Dockerfile"; then
+              echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "supports_dast=false" >> "$GITHUB_OUTPUT"
+            fi
           elif [ -f "php/composer.json" ]; then
             echo "dir=php" >> "$GITHUB_OUTPUT"
+            echo "project_found=true" >> "$GITHUB_OUTPUT"
             echo "has_composer=true" >> "$GITHUB_OUTPUT"
             if [ -f "php/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/Dockerfile"; then
               echo "supports_dast=true" >> "$GITHUB_OUTPUT"
@@ -52,6 +67,7 @@ jobs:
             fi
           elif [ -d "php" ] && [ -f "php/Dockerfile" -o -f "php/package.json" ]; then
             echo "dir=php" >> "$GITHUB_OUTPUT"
+            echo "project_found=true" >> "$GITHUB_OUTPUT"
             echo "has_composer=false" >> "$GITHUB_OUTPUT"
             if [ -f "php/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/Dockerfile"; then
               echo "supports_dast=true" >> "$GITHUB_OUTPUT"
@@ -59,8 +75,11 @@ jobs:
               echo "supports_dast=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "No recognizable PHP project found under php/."
-            exit 1
+            echo "No recognizable PHP project found under php/. Marking run as skipped."
+            echo "dir=php" >> "$GITHUB_OUTPUT"
+            echo "project_found=false" >> "$GITHUB_OUTPUT"
+            echo "has_composer=false" >> "$GITHUB_OUTPUT"
+            echo "supports_dast=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create report directory
@@ -519,7 +538,14 @@ jobs:
       - name: Publish summary to workflow run
         if: always()
         shell: bash
-        run: cat "${{ steps.project.outputs.dir }}/reports/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          SUMMARY_FILE="${{ steps.project.outputs.dir }}/reports/summary.md"
+          if [ -f "$SUMMARY_FILE" ]; then
+            cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "# PHP DevSecOps Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "Summary file missing: \`$SUMMARY_FILE\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Fallback report files
         if: always()
