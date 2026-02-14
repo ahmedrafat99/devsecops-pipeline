@@ -37,9 +37,11 @@ jobs:
             else
               echo "has_composer=false" >> "$GITHUB_OUTPUT"
             fi
-          elif [ -f "php/php-app-2/composer.json" ]; then
-            echo "dir=php/php-app-2" >> "$GITHUB_OUTPUT"
-            echo "has_composer=true" >> "$GITHUB_OUTPUT"
+            if [ -f "php/php-app-2/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/php-app-2/Dockerfile"; then
+              echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "supports_dast=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "No recognizable PHP App 2 project found under php/php-app-2."
             exit 1
@@ -54,6 +56,11 @@ jobs:
         with:
           php-version: "8.4"
           tools: composer
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
       - name: Secrets scan - Gitleaks (SARIF)
         id: gitleaks_step
@@ -155,7 +162,7 @@ jobs:
 
       - name: Start app container for DAST
         id: start_app_step
-        if: steps.build_image_step.outcome == 'success'
+        if: steps.build_image_step.outcome == 'success' && steps.project.outputs.supports_dast == 'true'
         shell: bash
         run: |
           docker network create zap-net-app-2 || true
@@ -194,7 +201,15 @@ jobs:
         shell: bash
         env:
           REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+          SUPPORTS_DAST: ${{ steps.project.outputs.supports_dast }}
         run: |
+          if [ "$SUPPORTS_DAST" != "true" ]; then
+            echo '{"status":"skipped","message":"DAST skipped: Docker image is not a web app exposing an HTTP endpoint."}' > "$REPORT_DIR/zap-report.json"
+            echo '<html><body><h1>ZAP skipped</h1><p>Docker image is not a web app exposing an HTTP endpoint.</p></body></html>' > "$REPORT_DIR/zap-report.html"
+            echo '<report status="skipped" message="DAST skipped: Docker image is not a web app exposing an HTTP endpoint."/>' > "$REPORT_DIR/zap-report.xml"
+            echo '# ZAP warnings' > "$REPORT_DIR/zap-warnings.md"
+            exit 0
+          fi
           if [ ! -f "$REPORT_DIR/zap-report.html" ]; then
             echo '<html><body><h1>ZAP report missing</h1></body></html>' > "$REPORT_DIR/zap-report.html"
           fi
@@ -389,6 +404,8 @@ jobs:
               return {"status": "missing", "notes": "report not found"}
             if isinstance(data, dict) and data.get("status") == "missing":
               return {"status": "missing", "notes": data.get("message", "no message")}
+            if isinstance(data, dict) and data.get("status") == "skipped":
+              return {"status": "skipped", "notes": data.get("message", "DAST skipped")}
             if not isinstance(data, dict):
               return {"status": "available", "alerts": "?", "instances": "?", "levels": "-", "normalized": "-", "notes": "unexpected format"}
             sites = data.get("site", []) or []

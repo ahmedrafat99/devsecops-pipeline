@@ -37,12 +37,27 @@ jobs:
             else
               echo "has_composer=false" >> "$GITHUB_OUTPUT"
             fi
+            if [ -f "php/VulnerableApp-php/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/VulnerableApp-php/Dockerfile"; then
+              echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "supports_dast=false" >> "$GITHUB_OUTPUT"
+            fi
           elif [ -f "php/composer.json" ]; then
             echo "dir=php" >> "$GITHUB_OUTPUT"
             echo "has_composer=true" >> "$GITHUB_OUTPUT"
+            if [ -f "php/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/Dockerfile"; then
+              echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "supports_dast=false" >> "$GITHUB_OUTPUT"
+            fi
           elif [ -d "php" ] && [ -f "php/Dockerfile" -o -f "php/package.json" ]; then
             echo "dir=php" >> "$GITHUB_OUTPUT"
             echo "has_composer=false" >> "$GITHUB_OUTPUT"
+            if [ -f "php/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/Dockerfile"; then
+              echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "supports_dast=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "No recognizable PHP project found under php/."
             exit 1
@@ -57,6 +72,11 @@ jobs:
         with:
           php-version: "8.2"
           tools: composer
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
       - name: Secrets scan - Gitleaks (SARIF)
         id: gitleaks_step
@@ -132,12 +152,14 @@ jobs:
         continue-on-error: true
 
       - name: Build Docker image
+        id: build_image_step
         shell: bash
         run: docker build -t vulnerable-php:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
         continue-on-error: true
 
       - name: Container scan - Trivy image (SARIF)
         id: trivy_image_step
+        if: steps.build_image_step.outcome == 'success'
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: vulnerable-php:ci
@@ -148,6 +170,8 @@ jobs:
         continue-on-error: true
 
       - name: Start app container for DAST
+        id: start_app_step
+        if: steps.build_image_step.outcome == 'success' && steps.project.outputs.supports_dast == 'true'
         shell: bash
         run: |
           docker network create zap-net || true
@@ -165,6 +189,7 @@ jobs:
 
       - name: DAST - OWASP ZAP baseline scan
         id: zap_step
+        if: steps.start_app_step.outcome == 'success'
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -185,7 +210,15 @@ jobs:
         shell: bash
         env:
           REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+          SUPPORTS_DAST: ${{ steps.project.outputs.supports_dast }}
         run: |
+          if [ "$SUPPORTS_DAST" != "true" ]; then
+            echo '{"status":"skipped","message":"DAST skipped: Docker image is not a web app exposing an HTTP endpoint."}' > "$REPORT_DIR/zap-report.json"
+            echo '<html><body><h1>ZAP skipped</h1><p>Docker image is not a web app exposing an HTTP endpoint.</p></body></html>' > "$REPORT_DIR/zap-report.html"
+            echo '<report status="skipped" message="DAST skipped: Docker image is not a web app exposing an HTTP endpoint."/>' > "$REPORT_DIR/zap-report.xml"
+            echo '# ZAP warnings' > "$REPORT_DIR/zap-warnings.md"
+            exit 0
+          fi
           if [ ! -f "$REPORT_DIR/zap-report.html" ]; then
             echo '<html><body><h1>ZAP report missing</h1></body></html>' > "$REPORT_DIR/zap-report.html"
           fi
@@ -378,6 +411,8 @@ jobs:
               return {"status": "missing", "notes": "report not found"}
             if isinstance(data, dict) and data.get("status") == "missing":
               return {"status": "missing", "notes": data.get("message", "no message")}
+            if isinstance(data, dict) and data.get("status") == "skipped":
+              return {"status": "skipped", "notes": data.get("message", "DAST skipped")}
             if not isinstance(data, dict):
               return {"status": "available", "alerts": "?", "instances": "?", "levels": "-", "normalized": "-", "notes": "unexpected format"}
             sites = data.get("site", []) or []
