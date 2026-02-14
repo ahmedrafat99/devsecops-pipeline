@@ -1,21 +1,26 @@
-FROM alpine:3.23
+FROM php:7.3-fpm-stretch AS base
 
-RUN adduser -H -D insider insider
+WORKDIR /var/www/html
 
-RUN apk add \
-    php84-cli \
-    php84-dom \
-    php84-simplexml \
-    php84-tokenizer \
-    php84-xml \
-    php84-xmlwriter \
-    composer=2.9.2-r0
+RUN rm /etc/apt/preferences.d/no-debian-php
+RUN apt-get update && apt-get install -y mariadb-client zlib1g-dev libfreetype6-dev libjpeg62-turbo-dev libpng-dev libxpm-dev libvpx-dev libmagickwand-dev zip libzip-dev php-soap vim netcat iputils-ping wget python cron \
+    && docker-php-ext-configure gd \
+		--with-freetype-dir=/usr/lib/x86_64-linux-gnu/ \
+		--with-jpeg-dir=/usr/lib/x86_64-linux-gnu/ \
+		--with-xpm-dir=/usr/lib/x86_64-linux-gnu/ \
+    && docker-php-ext-install pdo_mysql zip gd soap \
+    && pecl install imagick \
+    && docker-php-ext-enable imagick
 
-USER insider:insider
-WORKDIR /srv/php-insider
+COPY . /var/www/html
 
-COPY --chown=insider:insider . /srv/php-insider
+# Setup Laravel scheduler to run as root for privesc demonstration
+RUN echo '* * * * * root cd /var/www/html && php artisan schedule:run >> /dev/null 2>&1' >> /etc/crontab
 
-RUN composer install --no-interaction --optimize-autoloader
+RUN chown -R www-data:www-data /var/www/html/
+RUN find /var/www/html/ -type d -exec chmod 755 {} \;
+RUN find /var/www/html/ -type f -exec chmod 644 {} \;
+RUN chgrp -R www-data /var/www/html/storage /var/www/html/public/uploads /var/www/html/bootstrap/cache
+RUN chmod -R ug+rwx /var/www/html/storage /var/www/html/public/uploads /var/www/html/bootstrap/cache
 
-ENTRYPOINT ["/srv/php-insider/bin/insider"]
+CMD service cron start && php-fpm

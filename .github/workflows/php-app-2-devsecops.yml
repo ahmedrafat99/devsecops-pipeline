@@ -37,10 +37,15 @@ jobs:
             else
               echo "has_composer=false" >> "$GITHUB_OUTPUT"
             fi
-            if [ -f "php/php-app-2/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/php-app-2/Dockerfile"; then
+            if [ -f "php/php-app-2/docker-compose.yml" ] && grep -Eiq '^[[:space:]]*web:[[:space:]]*$|[[:space:]]1234:80' "php/php-app-2/docker-compose.yml"; then
               echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+              echo "dast_mode=compose" >> "$GITHUB_OUTPUT"
+            elif [ -f "php/php-app-2/Dockerfile" ] && grep -Eiq 'EXPOSE[[:space:]]+80|apache|httpd|nginx|php:.*apache|caddy' "php/php-app-2/Dockerfile"; then
+              echo "supports_dast=true" >> "$GITHUB_OUTPUT"
+              echo "dast_mode=docker" >> "$GITHUB_OUTPUT"
             else
               echo "supports_dast=false" >> "$GITHUB_OUTPUT"
+              echo "dast_mode=none" >> "$GITHUB_OUTPUT"
             fi
           else
             echo "No recognizable PHP App 2 project found under php/php-app-2."
@@ -164,7 +169,22 @@ jobs:
         id: start_app_step
         if: steps.build_image_step.outcome == 'success' && steps.project.outputs.supports_dast == 'true'
         shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        env:
+          DAST_MODE: ${{ steps.project.outputs.dast_mode }}
         run: |
+          if [ "$DAST_MODE" = "compose" ]; then
+            docker compose up -d --build web app database
+            for i in {1..60}; do
+              if curl -fsS http://127.0.0.1:1234/ > /dev/null; then
+                echo "PHP app is reachable for ZAP via docker-compose."
+                exit 0
+              fi
+              sleep 2
+            done
+            docker compose logs || true
+            exit 1
+          fi
           docker network create zap-net-app-2 || true
           docker run -d --name php-app-2 -p 8080:80 --network zap-net-app-2 vulnerable-php-app-2:ci
           for i in {1..45}; do
@@ -182,18 +202,34 @@ jobs:
         id: zap_step
         if: steps.start_app_step.outcome == 'success'
         shell: bash
+        env:
+          DAST_MODE: ${{ steps.project.outputs.dast_mode }}
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
-          docker run --rm --network zap-net-app-2 \
-            --user root \
-            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
-            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-            -t http://php-app-2 \
-            -r zap-report.html \
-            -J zap-report.json \
-            -x zap-report.xml \
-            -w zap-warnings.md \
-            -I
+          if [ "$DAST_MODE" = "compose" ]; then
+            docker run --rm \
+              --add-host=host.docker.internal:host-gateway \
+              --user root \
+              -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+              ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+              -t http://host.docker.internal:1234 \
+              -r zap-report.html \
+              -J zap-report.json \
+              -x zap-report.xml \
+              -w zap-warnings.md \
+              -I
+          else
+            docker run --rm --network zap-net-app-2 \
+              --user root \
+              -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+              ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+              -t http://php-app-2 \
+              -r zap-report.html \
+              -J zap-report.json \
+              -x zap-report.xml \
+              -w zap-warnings.md \
+              -I
+          fi
         continue-on-error: true
 
       - name: Normalize ZAP artifacts
@@ -226,7 +262,13 @@ jobs:
       - name: Stop app container
         if: always()
         shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        env:
+          DAST_MODE: ${{ steps.project.outputs.dast_mode }}
         run: |
+          if [ "$DAST_MODE" = "compose" ]; then
+            docker compose down -v || true
+          fi
           docker rm -f php-app-2 || true
           docker network rm zap-net-app-2 || true
 
