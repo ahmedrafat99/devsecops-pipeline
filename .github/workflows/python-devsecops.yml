@@ -51,20 +51,22 @@ jobs:
       - name: Secrets scan - Gitleaks (SARIF)
         shell: bash
         run: |
-          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" zricethezav/gitleaks:latest detect \
+          docker run --rm -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/repo" zricethezav/gitleaks:latest detect \
             --source="/repo" \
             --report-format sarif \
-            --report-path "/repo/${{ steps.project.outputs.dir }}/reports/gitleaks.sarif" \
+            --report-path "/repo/reports/gitleaks.sarif" \
             --exit-code 0
         continue-on-error: true
 
       - name: Secrets scan - TruffleHog (JSON)
         shell: bash
         run: |
-          docker run --rm -v "${GITHUB_WORKSPACE}:/pwd" trufflesecurity/trufflehog:latest filesystem \
-            --directory=/pwd \
-            --json \
-            > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
+          docker run --rm -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/repo" trufflesecurity/trufflehog:latest filesystem \
+            --directory=/repo \
+            --json > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
+          if [ ! -s "${{ steps.project.outputs.dir }}/reports/trufflehog.json" ]; then
+            echo "[]" > "${{ steps.project.outputs.dir }}/reports/trufflehog.json"
+          fi
         continue-on-error: true
 
       - name: Install application and security tooling
@@ -279,10 +281,18 @@ jobs:
             rules = runs[0].get("tool", {}).get("driver", {}).get("rules", [])
             default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
             levels = Counter()
+            severities = Counter()
+            level_to_sev = {
+              "error": "HIGH",
+              "warning": "MEDIUM",
+              "note": "LOW",
+              "none": "LOW",
+            }
             for item in results:
               lvl = item.get("level") or default_level.get(item.get("ruleId")) or "unknown"
               levels[lvl] += 1
-            return {"total": len(results), "levels": dict(sorted(levels.items()))}
+              severities[level_to_sev.get(str(lvl).lower(), "UNKNOWN")] += 1
+            return {"total": len(results), "levels": dict(sorted(levels.items())), "severities": dict(sorted(severities.items()))}
 
           def parse_trivy_severity(name: str):
             raw = read_text(name)
@@ -453,6 +463,12 @@ jobs:
               return "-"
             return ", ".join(f"{k}:{v}" for k, v in obj["levels"].items())
 
+          def fmt_sev(obj):
+            if not obj or not obj.get("severities"):
+              return "-"
+            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+            return ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj["severities"])
+
           lines = [
             "# DevSecOps Report Summary",
             "",
@@ -470,10 +486,10 @@ jobs:
               f"report=available; alerts={zap.get('alerts', 'N/A')}; levels={fmt_levels(zap)}" if zap and zap.get("status") == "available"
               else (zap.get("message", "report missing") if zap else "N/A")
             ) + " |",
-            f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)} |",
+            f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)}; severities={fmt_sev(semgrep)} |",
             f"| Trivy deps (SARIF) | findings={trivy_deps['total'] if trivy_deps else 'N/A'}; levels={fmt_levels(trivy_deps)}; severities={', '.join([f'{k}:{v}' for k,v in (trivy_deps_sev or {}).items()]) if trivy_deps_sev else 'N/A'} |",
             f"| Trivy image (SARIF) | findings={trivy_image['total'] if trivy_image else 'N/A'}; levels={fmt_levels(trivy_image)}; severities={', '.join([f'{k}:{v}' for k,v in (trivy_image_sev or {}).items()]) if trivy_image_sev else 'N/A'} |",
-            f"| Gitleaks (SARIF) | findings={gitleaks['total'] if gitleaks else 'N/A'}; levels={fmt_levels(gitleaks)} |",
+            f"| Gitleaks (SARIF) | findings={gitleaks['total'] if gitleaks else 'N/A'}; levels={fmt_levels(gitleaks)}; severities={fmt_sev(gitleaks)} |",
             f"| TruffleHog (JSON) | findings={trufflehog['total'] if trufflehog else 'N/A'} |",
             "",
             "## Files",

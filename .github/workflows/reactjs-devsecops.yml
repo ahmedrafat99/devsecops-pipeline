@@ -50,18 +50,18 @@ jobs:
       - name: Secrets scan - Gitleaks (SARIF)
         shell: bash
         run: |
-          docker run --rm -v "${GITHUB_WORKSPACE}:/repo" zricethezav/gitleaks:latest detect \
-            --source="/repo/${{ steps.project.outputs.dir }}" \
+          docker run --rm -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/repo" zricethezav/gitleaks:latest detect \
+            --source="/repo" \
             --report-format sarif \
-            --report-path "/repo/${{ steps.project.outputs.dir }}/reports/gitleaks.sarif" \
+            --report-path "/repo/reports/gitleaks.sarif" \
             --exit-code 0
         continue-on-error: true
 
       - name: Secrets scan - TruffleHog (JSON)
         shell: bash
         run: |
-          docker run --rm -v "${GITHUB_WORKSPACE}:/pwd" trufflesecurity/trufflehog:latest filesystem \
-            --directory=/pwd/${{ steps.project.outputs.dir }} \
+          docker run --rm -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/repo" trufflesecurity/trufflehog:latest filesystem \
+            --directory=/repo \
             --json \
             > "${{ steps.project.outputs.dir }}/reports/trufflehog.json" || true
           if [ ! -s "${{ steps.project.outputs.dir }}/reports/trufflehog.json" ]; then
@@ -249,17 +249,27 @@ jobs:
             rules = run.get("tool", {}).get("driver", {}).get("rules", []) or []
             default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
             lv = Counter()
+            sev = Counter()
+            level_to_sev = {
+              "error": "HIGH",
+              "warning": "MEDIUM",
+              "note": "LOW",
+              "none": "LOW",
+            }
             rc = Counter()
             for r in results:
               lvl = r.get("level") or default_level.get(r.get("ruleId")) or "unknown"
               lv[lvl] += 1
+              sev[level_to_sev.get(str(lvl).lower(), "UNKNOWN")] += 1
               rc[r.get("ruleId") or "unknown"] += 1
-            return {"status": "ok", "total": len(results), "levels": dict(sorted(lv.items())), "top_rules": rc.most_common(5)}
+            return {"status": "ok", "total": len(results), "levels": dict(sorted(lv.items())), "severities": dict(sorted(sev.items())), "top_rules": rc.most_common(5)}
 
           def sarif_line(label: str, obj: dict) -> str:
             levels = ", ".join(f"{k}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
+            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+            severities = ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj.get("severities", {})) or "-"
             top = ", ".join(f"{k}:{v}" for k, v in obj["top_rules"]) if obj["top_rules"] else "-"
-            return f"{label}: status={obj['status']}; findings={obj['total']}; levels={levels}; top_rules={top}"
+            return f"{label}: status={obj['status']}; findings={obj['total']}; levels={levels}; severities={severities}; top_rules={top}"
 
           def parse_npm_audit():
             data = load_json("npm-audit.json")
