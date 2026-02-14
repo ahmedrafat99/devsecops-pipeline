@@ -52,7 +52,7 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
+          php-version: "8.4"
           tools: composer
 
       - name: Secrets scan - Gitleaks (SARIF)
@@ -85,12 +85,19 @@ jobs:
         run: composer install --no-interaction --prefer-dist || true
 
       - name: SCA - Composer audit
+        id: composer_audit_step
         if: steps.project.outputs.has_composer == 'true'
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
           composer audit --format json > reports/composer-audit.json || true
           composer audit > reports/composer-audit.txt || true
+          if [ ! -s reports/composer-audit.json ]; then
+            echo '{"status":"failed","reason":"composer audit produced no JSON output"}' > reports/composer-audit.json
+          fi
+          if [ ! -s reports/composer-audit.txt ]; then
+            echo "composer audit produced no text output" > reports/composer-audit.txt
+          fi
         continue-on-error: true
 
       - name: SCA - Composer not present marker
@@ -129,12 +136,14 @@ jobs:
         continue-on-error: true
 
       - name: Build Docker image
+        id: build_image_step
         shell: bash
         run: docker build -t vulnerable-php-app-2:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
         continue-on-error: true
 
       - name: Container scan - Trivy image (SARIF)
         id: trivy_image_step
+        if: steps.build_image_step.outcome == 'success'
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: vulnerable-php-app-2:ci
@@ -145,6 +154,8 @@ jobs:
         continue-on-error: true
 
       - name: Start app container for DAST
+        id: start_app_step
+        if: steps.build_image_step.outcome == 'success'
         shell: bash
         run: |
           docker network create zap-net-app-2 || true
@@ -162,6 +173,7 @@ jobs:
 
       - name: DAST - OWASP ZAP baseline scan
         id: zap_step
+        if: steps.start_app_step.outcome == 'success'
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -333,6 +345,8 @@ jobs:
               return "missing"
             if isinstance(data, dict) and data.get("status") == "skipped":
               return f"skipped ({data.get('reason', 'no reason')})"
+            if isinstance(data, dict) and data.get("status") == "failed":
+              return f"failed ({data.get('reason', 'no reason')})"
             if isinstance(data, dict):
               # composer audit can return advisories by package
               advisories = data.get("advisories", {})
@@ -416,6 +430,7 @@ jobs:
           trivy_image = parse_sarif("trivy-image.sarif")
           gitleaks = parse_sarif("gitleaks.sarif")
           trufflehog_text = parse_trufflehog()
+          composer_text = parse_composer()
           semgrep_outcome = (os.getenv("SEMGREP_OUTCOME") or "").strip()
           trivy_deps_outcome = (os.getenv("TRIVY_DEPS_OUTCOME") or "").strip()
           trivy_image_outcome = (os.getenv("TRIVY_IMAGE_OUTCOME") or "").strip()
@@ -453,6 +468,15 @@ jobs:
 
           zap = parse_zap()
 
+          def composer_status(text: str) -> str:
+            if text.startswith("failed"):
+              return "failed"
+            if text.startswith("skipped"):
+              return "skipped"
+            if text == "missing":
+              return "missing_report"
+            return "ok"
+
           lines = [
               "# PHP DevSecOps Summary",
               "",
@@ -461,7 +485,7 @@ jobs:
               "",
               "| Tool | Status | Findings | Critical | High | Medium | Low | Notes |",
               "|---|---|---:|---:|---:|---:|---:|---|",
-              f"| Composer audit | {'ok' if parse_composer() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_composer()} |",
+              f"| Composer audit | {composer_status(composer_text)} | - | - | - | - | - | {composer_text} |",
               f"| PHP lint | {'ok' if parse_php_lint() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_php_lint()} |",
               f"| Semgrep (SARIF) | {tool_status(semgrep, semgrep_outcome)} | {semgrep['total']} | {sev_count(semgrep, 'CRITICAL')} | {sev_count(semgrep, 'HIGH')} | {sev_count(semgrep, 'MEDIUM')} | {sev_count(semgrep, 'LOW')} | step={semgrep_outcome or '-'}; levels={level_text(semgrep)}; top={top_text(semgrep)} |",
               f"| Trivy deps (SARIF) | {tool_status(trivy_deps, trivy_deps_outcome)} | {trivy_deps['total']} | {sev_count(trivy_deps, 'CRITICAL')} | {sev_count(trivy_deps, 'HIGH')} | {sev_count(trivy_deps, 'MEDIUM')} | {sev_count(trivy_deps, 'LOW')} | step={trivy_deps_outcome or '-'}; levels={level_text(trivy_deps)}; top={top_text(trivy_deps)} |",
