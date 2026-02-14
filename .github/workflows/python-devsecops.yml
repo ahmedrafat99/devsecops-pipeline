@@ -283,7 +283,7 @@ jobs:
             levels = Counter()
             severities = Counter()
             level_to_sev = {
-              "error": "HIGH",
+              "error": "CRITICAL",
               "warning": "MEDIUM",
               "note": "LOW",
               "none": "LOW",
@@ -291,7 +291,7 @@ jobs:
             for item in results:
               lvl = item.get("level") or default_level.get(item.get("ruleId")) or "unknown"
               levels[lvl] += 1
-              severities[level_to_sev.get(str(lvl).lower(), "UNKNOWN")] += 1
+              severities[level_to_sev.get(str(lvl).lower(), "LOW")] += 1
             return {"total": len(results), "levels": dict(sorted(levels.items())), "severities": dict(sorted(severities.items()))}
 
           def parse_trivy_severity(name: str):
@@ -314,13 +314,13 @@ jobs:
               sev = None
               for t in tags:
                 tt = str(t).upper()
-                if tt in {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}:
+                if tt in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
                   sev = tt
                   break
-              sev_by_rule[rid] = sev or "UNKNOWN"
+              sev_by_rule[rid] = sev or "LOW"
             counts = Counter()
             for item in results:
-              counts[sev_by_rule.get(item.get("ruleId"), "UNKNOWN")] += 1
+              counts[sev_by_rule.get(item.get("ruleId"), "LOW")] += 1
             return dict(sorted(counts.items()))
 
           def parse_flake8():
@@ -466,7 +466,7 @@ jobs:
           def fmt_sev(obj):
             if not obj or not obj.get("severities"):
               return "-"
-            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
             return ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj["severities"])
 
           lines = [

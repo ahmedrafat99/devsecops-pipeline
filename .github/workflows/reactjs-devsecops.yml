@@ -251,7 +251,7 @@ jobs:
             lv = Counter()
             sev = Counter()
             level_to_sev = {
-              "error": "HIGH",
+              "error": "CRITICAL",
               "warning": "MEDIUM",
               "note": "LOW",
               "none": "LOW",
@@ -260,13 +260,13 @@ jobs:
             for r in results:
               lvl = r.get("level") or default_level.get(r.get("ruleId")) or "unknown"
               lv[lvl] += 1
-              sev[level_to_sev.get(str(lvl).lower(), "UNKNOWN")] += 1
+              sev[level_to_sev.get(str(lvl).lower(), "LOW")] += 1
               rc[r.get("ruleId") or "unknown"] += 1
             return {"status": "ok", "total": len(results), "levels": dict(sorted(lv.items())), "severities": dict(sorted(sev.items())), "top_rules": rc.most_common(5)}
 
           def sarif_line(label: str, obj: dict) -> str:
             levels = ", ".join(f"{k}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
-            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
             severities = ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj.get("severities", {})) or "-"
             top = ", ".join(f"{k}:{v}" for k, v in obj["top_rules"]) if obj["top_rules"] else "-"
             return f"{label}: status={obj['status']}; findings={obj['total']}; levels={levels}; severities={severities}; top_rules={top}"
