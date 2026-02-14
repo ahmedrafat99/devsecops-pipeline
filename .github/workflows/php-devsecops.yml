@@ -361,11 +361,11 @@ jobs:
           def parse_zap():
             data = load_json("zap-report.json")
             if not data:
-              return "missing"
+              return {"status": "missing", "notes": "report not found"}
             if isinstance(data, dict) and data.get("status") == "missing":
-              return f"missing ({data.get('message', 'no message')})"
+              return {"status": "missing", "notes": data.get("message", "no message")}
             if not isinstance(data, dict):
-              return "available (unexpected format)"
+              return {"status": "available", "alerts": "?", "instances": "?", "levels": "-", "normalized": "-", "notes": "unexpected format"}
             sites = data.get("site", []) or []
             risk_map = {"0": "info", "1": "low", "2": "medium", "3": "high"}
             levels = Counter()
@@ -383,29 +383,43 @@ jobs:
             levels_text = ", ".join(f"{k}:{v}" for k, v in sorted(levels.items())) if levels else "-"
             # Normalize ZAP risk levels to the requested five-band scale.
             normalized = Counter()
+            normalized["CRITICAL"] += 0
             normalized["HIGH"] += levels.get("high", 0)
             normalized["MEDIUM"] += levels.get("medium", 0)
             normalized["LOW"] += levels.get("low", 0) + levels.get("info", 0) + levels.get("unknown", 0)
-            ntext = ", ".join(
-              f"{k}:{normalized[k]}" for k in ["CRITICAL", "HIGH", "MEDIUM", "LOW"] if normalized.get(k, 0) > 0
-            ) or "-"
-            return f"alerts={alert_types}; instances={instances_total}; levels={levels_text}; normalized={ntext}"
+            ntext = ", ".join(f"{k}:{normalized[k]}" for k in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]) or "-"
+            return {
+              "status": "available",
+              "alerts": alert_types,
+              "instances": instances_total,
+              "levels": levels_text,
+              "normalized": ntext,
+              "critical": normalized["CRITICAL"],
+              "high": normalized["HIGH"],
+              "medium": normalized["MEDIUM"],
+              "low": normalized["LOW"],
+            }
 
           semgrep = parse_sarif("semgrep.sarif")
           trivy_deps = parse_sarif("trivy-deps.sarif")
           trivy_image = parse_sarif("trivy-image.sarif")
           gitleaks = parse_sarif("gitleaks.sarif")
+          trufflehog_text = parse_trufflehog()
 
-          def sarif_line(name: str, obj: dict) -> str:
-            levels = ", ".join(f"{k.upper()}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
-            order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-            severities = ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj.get("severities", {})) or "-"
+          def sev_count(obj: dict, key: str) -> int:
+            return int(obj.get("severities", {}).get(key, 0))
+
+          def level_text(obj: dict) -> str:
+            return ", ".join(f"{k.upper()}:{v}" for k, v in obj.get("levels", {}).items()) if obj.get("levels") else "-"
+
+          def top_text(obj: dict) -> str:
             def short_rule(rule_id: str) -> str:
-              if len(rule_id) <= 56:
+              if len(rule_id) <= 40:
                 return rule_id
-              return rule_id[:53] + "..."
-            top_rules = ", ".join(f"{short_rule(r)}:{c}" for r, c in obj["top_rules"][:3]) if obj["top_rules"] else "-"
-            return f"{name}: status={obj['status']}; findings={obj['total']}; levels={levels}; severities={severities}; top_rules={top_rules}"
+              return rule_id[:37] + "..."
+            return ", ".join(f"{short_rule(r)}:{c}" for r, c in obj.get("top_rules", [])[:2]) or "-"
+
+          zap = parse_zap()
 
           lines = [
               "# PHP DevSecOps Summary",
@@ -413,16 +427,16 @@ jobs:
               f"- Project directory: `{project_dir}`",
               f"- Composer file detected: `{'Yes' if has_composer else 'No'}`",
               "",
-              "| Tool | Detailed Result |",
-              "|---|---|",
-              f"| Composer audit | {parse_composer()} |",
-              f"| PHP lint | {parse_php_lint()} |",
-              f"| Semgrep (SARIF) | {sarif_line('semgrep', semgrep)} |",
-              f"| Trivy deps (SARIF) | {sarif_line('trivy-deps', trivy_deps)} |",
-              f"| Trivy image (SARIF) | {sarif_line('trivy-image', trivy_image)} |",
-              f"| Gitleaks (SARIF) | {sarif_line('gitleaks', gitleaks)} |",
-              f"| TruffleHog (JSON) | {parse_trufflehog()} |",
-              f"| OWASP ZAP (JSON) | {parse_zap()} |",
+              "| Tool | Findings | Critical | High | Medium | Low | Notes |",
+              "|---|---:|---:|---:|---:|---:|---|",
+              f"| Composer audit | - | - | - | - | - | {parse_composer()} |",
+              f"| PHP lint | - | - | - | - | - | {parse_php_lint()} |",
+              f"| Semgrep (SARIF) | {semgrep['total']} | {sev_count(semgrep, 'CRITICAL')} | {sev_count(semgrep, 'HIGH')} | {sev_count(semgrep, 'MEDIUM')} | {sev_count(semgrep, 'LOW')} | levels={level_text(semgrep)}; top={top_text(semgrep)} |",
+              f"| Trivy deps (SARIF) | {trivy_deps['total']} | {sev_count(trivy_deps, 'CRITICAL')} | {sev_count(trivy_deps, 'HIGH')} | {sev_count(trivy_deps, 'MEDIUM')} | {sev_count(trivy_deps, 'LOW')} | levels={level_text(trivy_deps)}; top={top_text(trivy_deps)} |",
+              f"| Trivy image (SARIF) | {trivy_image['total']} | {sev_count(trivy_image, 'CRITICAL')} | {sev_count(trivy_image, 'HIGH')} | {sev_count(trivy_image, 'MEDIUM')} | {sev_count(trivy_image, 'LOW')} | levels={level_text(trivy_image)}; top={top_text(trivy_image)} |",
+              f"| Gitleaks (SARIF) | {gitleaks['total']} | {sev_count(gitleaks, 'CRITICAL')} | {sev_count(gitleaks, 'HIGH')} | {sev_count(gitleaks, 'MEDIUM')} | {sev_count(gitleaks, 'LOW')} | levels={level_text(gitleaks)}; top={top_text(gitleaks)} |",
+              f"| TruffleHog (JSON) | {trufflehog_text.replace('findings=', '') if trufflehog_text.startswith('findings=') else '-'} | - | - | - | - | {trufflehog_text} |",
+              f"| OWASP ZAP (JSON) | {zap.get('alerts', '-')} ({zap.get('instances', '-')}) | {zap.get('critical', 0) if zap.get('status') == 'available' else '-'} | {zap.get('high', 0) if zap.get('status') == 'available' else '-'} | {zap.get('medium', 0) if zap.get('status') == 'available' else '-'} | {zap.get('low', 0) if zap.get('status') == 'available' else '-'} | levels={zap.get('levels', '-')}; status={zap.get('status', '-')} {('; ' + zap.get('notes')) if zap.get('notes') else ''} |",
               "",
               "## Files",
           ]
