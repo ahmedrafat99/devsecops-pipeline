@@ -1,16 +1,31 @@
-FROM php:7.3-fpm-stretch AS base
+FROM php:7.4-fpm-bullseye AS base
 
 WORKDIR /var/www/html
 
-RUN rm /etc/apt/preferences.d/no-debian-php
-RUN apt-get update && apt-get install -y mariadb-client zlib1g-dev libfreetype6-dev libjpeg62-turbo-dev libpng-dev libxpm-dev libvpx-dev libmagickwand-dev zip libzip-dev php-soap vim netcat iputils-ping wget python cron \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    mariadb-client \
+    zlib1g-dev \
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libxpm-dev \
+    libmagickwand-dev \
+    zip \
+    libzip-dev \
+    vim \
+    netcat-openbsd \
+    iputils-ping \
+    wget \
+    python3 \
+    cron \
     && docker-php-ext-configure gd \
-		--with-freetype-dir=/usr/lib/x86_64-linux-gnu/ \
-		--with-jpeg-dir=/usr/lib/x86_64-linux-gnu/ \
-		--with-xpm-dir=/usr/lib/x86_64-linux-gnu/ \
+		--with-freetype \
+		--with-jpeg \
+		--with-xpm \
     && docker-php-ext-install pdo_mysql zip gd soap \
     && pecl install imagick \
-    && docker-php-ext-enable imagick
+    && docker-php-ext-enable imagick \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . /var/www/html
 

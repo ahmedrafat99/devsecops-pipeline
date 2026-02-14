@@ -113,13 +113,30 @@ jobs:
 
       - name: Build Docker image
         id: build_image_step
+        if: steps.project.outputs.dast_mode != 'compose'
         shell: bash
         run: docker build -t vulnerable-php-app-2:ci -f ${{ steps.project.outputs.dir }}/Dockerfile ${{ steps.project.outputs.dir }}
         continue-on-error: true
 
+      - name: Build app image via docker-compose fallback
+        id: build_compose_image_step
+        if: steps.project.outputs.dast_mode == 'compose'
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          docker compose build app
+          APP_IMAGE_ID="$(docker compose images -q app | head -n1)"
+          if [ -n "$APP_IMAGE_ID" ]; then
+            docker tag "$APP_IMAGE_ID" vulnerable-php-app-2:ci
+          else
+            echo "Could not resolve compose app image ID."
+            exit 1
+          fi
+        continue-on-error: true
+
       - name: Container scan - Trivy image (SARIF)
         id: trivy_image_step
-        if: steps.build_image_step.outcome == 'success'
+        if: steps.build_image_step.outcome == 'success' || steps.build_compose_image_step.outcome == 'success'
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: vulnerable-php-app-2:ci
@@ -132,7 +149,7 @@ jobs:
 
       - name: Start app container for DAST
         id: start_app_step
-        if: steps.build_image_step.outcome == 'success' && steps.project.outputs.supports_dast == 'true'
+        if: steps.project.outputs.supports_dast == 'true' && (steps.project.outputs.dast_mode == 'compose' || steps.build_image_step.outcome == 'success')
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         env:
