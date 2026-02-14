@@ -397,17 +397,21 @@ jobs:
           gitleaks = parse_sarif("gitleaks.sarif")
 
           def sarif_line(name: str, obj: dict) -> str:
-            levels = ", ".join(f"{k}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
+            levels = ", ".join(f"{k.upper()}:{v}" for k, v in obj["levels"].items()) if obj["levels"] else "-"
             order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
             severities = ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj.get("severities", {})) or "-"
-            top_rules = ", ".join(f"{r}:{c}" for r, c in obj["top_rules"]) if obj["top_rules"] else "-"
+            def short_rule(rule_id: str) -> str:
+              if len(rule_id) <= 56:
+                return rule_id
+              return rule_id[:53] + "..."
+            top_rules = ", ".join(f"{short_rule(r)}:{c}" for r, c in obj["top_rules"][:3]) if obj["top_rules"] else "-"
             return f"{name}: status={obj['status']}; findings={obj['total']}; levels={levels}; severities={severities}; top_rules={top_rules}"
 
           lines = [
               "# PHP DevSecOps Summary",
               "",
               f"- Project directory: `{project_dir}`",
-              f"- Composer file detected: `{has_composer}`",
+              f"- Composer file detected: `{'Yes' if has_composer else 'No'}`",
               "",
               "| Tool | Detailed Result |",
               "|---|---|",
