@@ -84,6 +84,7 @@ jobs:
         run: |
           docker run --rm -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/repo" zricethezav/gitleaks:latest detect \
             --source="/repo" \
+            --no-git \
             --report-format sarif \
             --report-path "/repo/reports/gitleaks.sarif" \
             --exit-code 0
