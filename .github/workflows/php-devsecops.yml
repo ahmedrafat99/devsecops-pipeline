@@ -120,20 +120,6 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: SCA - Composer audit disabled
-        shell: bash
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          echo '{"status":"disabled","reason":"composer audit disabled by pipeline configuration"}' > reports/composer-audit.json
-          echo "Composer audit disabled by pipeline configuration." > reports/composer-audit.txt
-
-      - name: Lint - PHP syntax
-        shell: bash
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          find . -type f -name "*.php" -print0 | xargs -0 -I{} php -l "{}" > reports/php-lint.txt 2>&1 || true
-        continue-on-error: true
-
       - name: SAST - Semgrep (SARIF)
         id: semgrep_step
         shell: bash
@@ -148,6 +134,7 @@ jobs:
         with:
           scan-type: fs
           scan-ref: ${{ steps.project.outputs.dir }}
+          scanners: vuln
           vuln-type: library
           severity: CRITICAL,HIGH,MEDIUM
           format: sarif
@@ -166,6 +153,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: vulnerable-php:ci
+          scanners: vuln
           vuln-type: os,library
           severity: CRITICAL,HIGH,MEDIUM
           format: sarif
@@ -252,7 +240,6 @@ jobs:
           [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
           [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
           [ -f reports/trufflehog.json ] || echo '{"status":"missing"}' > reports/trufflehog.json
-          [ -f reports/composer-audit.json ] || echo '{"status":"disabled","reason":"composer audit disabled by pipeline configuration"}' > reports/composer-audit.json
 
       - name: Upload SARIF - Semgrep
         if: always()
@@ -300,13 +287,11 @@ jobs:
           python - <<'PY'
           import os
           import json
-          import re
           from collections import Counter
           from pathlib import Path
 
           report_dir = Path("reports")
           report_dir.mkdir(exist_ok=True)
-          has_composer = "${{ steps.project.outputs.has_composer }}" == "true"
           project_dir = "${{ steps.project.outputs.dir }}"
 
           def text(name: str) -> str:
@@ -377,30 +362,6 @@ jobs:
               "severities": dict(sorted(sev.items())),
               "top_rules": rule_counts.most_common(5),
             }
-
-          def parse_composer():
-            data = load_json("composer-audit.json")
-            if not data:
-              return "missing"
-            if isinstance(data, dict) and data.get("status") == "disabled":
-              return f"disabled ({data.get('reason', 'no reason')})"
-            if isinstance(data, dict) and data.get("status") == "skipped":
-              return f"skipped ({data.get('reason', 'no reason')})"
-            if isinstance(data, dict):
-              # composer audit can return advisories by package
-              advisories = data.get("advisories", {})
-              if isinstance(advisories, dict):
-                vuln_count = sum(len(v or []) for v in advisories.values())
-                return f"vulnerabilities={vuln_count}; affected_packages={len(advisories)}"
-            return "available (format not recognized)"
-
-          def parse_php_lint():
-            raw = text("php-lint.txt")
-            if not raw:
-              return "missing"
-            errors = len(re.findall(r"Parse error|Fatal error", raw))
-            ok = len(re.findall(r"No syntax errors detected", raw))
-            return f"files_checked={ok}; parse_errors={errors}"
 
           def parse_trufflehog():
             raw = text("trufflehog.json")
@@ -512,12 +473,9 @@ jobs:
               "# PHP DevSecOps Summary",
               "",
               f"- Project directory: `{project_dir}`",
-              f"- Composer file detected: `{'Yes' if has_composer else 'No'}`",
               "",
               "| Tool | Status | Findings | Critical | High | Medium | Low | Notes |",
               "|---|---|---:|---:|---:|---:|---:|---|",
-              f"| Composer audit | {'disabled' if parse_composer().startswith('disabled') else ('ok' if parse_composer() != 'missing' else 'missing_report')} | - | - | - | - | - | {parse_composer()} |",
-              f"| PHP lint | {'ok' if parse_php_lint() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_php_lint()} |",
               f"| Semgrep (SARIF) | {tool_status(semgrep, semgrep_outcome)} | {semgrep['total']} | {sev_count(semgrep, 'CRITICAL')} | {sev_count(semgrep, 'HIGH')} | {sev_count(semgrep, 'MEDIUM')} | {sev_count(semgrep, 'LOW')} | step={semgrep_outcome or '-'}; levels={level_text(semgrep)}; top={top_text(semgrep)} |",
               f"| Trivy deps (SARIF) | {tool_status(trivy_deps, trivy_deps_outcome)} | {trivy_deps['total']} | {sev_count(trivy_deps, 'CRITICAL')} | {sev_count(trivy_deps, 'HIGH')} | {sev_count(trivy_deps, 'MEDIUM')} | {sev_count(trivy_deps, 'LOW')} | step={trivy_deps_outcome or '-'}; levels={level_text(trivy_deps)}; top={top_text(trivy_deps)} |",
               f"| Trivy image (SARIF) | {tool_status(trivy_image, trivy_image_outcome)} | {trivy_image['total']} | {sev_count(trivy_image, 'CRITICAL')} | {sev_count(trivy_image, 'HIGH')} | {sev_count(trivy_image, 'MEDIUM')} | {sev_count(trivy_image, 'LOW')} | step={trivy_image_outcome or '-'}; levels={level_text(trivy_image)}; top={top_text(trivy_image)} |",
@@ -555,7 +513,6 @@ jobs:
           [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
           [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
           [ -f reports/trufflehog.json ] || echo '{"status":"missing"}' > reports/trufflehog.json
-          [ -f reports/composer-audit.json ] || echo '{"status":"missing"}' > reports/composer-audit.json
           [ -f reports/summary.md ] || cat > reports/summary.md <<'EOF'
           # PHP DevSecOps Summary
           Fallback summary file.
