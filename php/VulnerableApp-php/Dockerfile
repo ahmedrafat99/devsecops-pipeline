@@ -1,9 +1,13 @@
-FROM jamesbrink/php:latest
+FROM php:8.2-apache-bookworm
 LABEL maintainer="KSASAN preetkaran20@gmail.com"
-COPY src/ /var/www/localhost/htdocs/VulnerableApp-php/
-COPY static/ /var/www/localhost/htdocs/VulnerableApp-php/
-COPY resources/ /var/www/localhost/htdocs/VulnerableApp-php/resources
-COPY vulnerablehtaccess/ /var/www/localhost/htdocs/VulnerableApp-php/images/specialimages
-RUN chmod -R 777 /var/www/localhost/htdocs/ && \ 
-sed -i '/<Directory \/var\/www\localhost/htdocs/>/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/apache2/httpd.conf \
-&& sed -i 's/\\.php$>/"(?i)\\.php$|\\.php5$|\\.php4$|\\.php3$|\\.phtml$|\\.phpt$">/' /etc/apache2/conf.d/php.conf
+
+RUN a2enmod rewrite
+
+COPY src/ /var/www/html/VulnerableApp-php/
+COPY static/ /var/www/html/VulnerableApp-php/
+COPY resources/ /var/www/html/VulnerableApp-php/resources
+COPY vulnerablehtaccess/ /var/www/html/VulnerableApp-php/images/specialimages
+
+RUN chmod -R 777 /var/www/html/
+
+EXPOSE 80

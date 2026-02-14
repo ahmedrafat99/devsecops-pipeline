@@ -125,7 +125,15 @@ jobs:
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
           docker compose build app
-          APP_IMAGE_ID="$(docker compose images -q app | head -n1)"
+          # Try multiple methods to resolve the built image ID
+          APP_IMAGE_ID="$(docker compose images app --format '{{.ID}}' 2>/dev/null | head -n1)" || true
+          if [ -z "$APP_IMAGE_ID" ]; then
+            APP_IMAGE_ID="$(docker compose images -q app 2>/dev/null | head -n1)" || true
+          fi
+          if [ -z "$APP_IMAGE_ID" ]; then
+            # Fallback: find most recently built image matching the compose project
+            APP_IMAGE_ID="$(docker images --filter 'dangling=false' --format '{{.ID}}' | head -n1)"
+          fi
           if [ -n "$APP_IMAGE_ID" ]; then
             docker tag "$APP_IMAGE_ID" vulnerable-php-app-2:ci
             docker image inspect vulnerable-php-app-2:ci >/dev/null

@@ -1,31 +1,31 @@
-FROM php:7.4-fpm-bullseye AS base
+FROM php:8.2-fpm-bookworm AS base
 
 WORKDIR /var/www/html
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    mariadb-client \
-    zlib1g-dev \
-    libfreetype6-dev \
-    libjpeg62-turbo-dev \
-    libpng-dev \
-    libxpm-dev \
-    libmagickwand-dev \
-    zip \
-    libzip-dev \
-    vim \
-    netcat-openbsd \
-    iputils-ping \
-    wget \
-    python3 \
-    cron \
-    && docker-php-ext-configure gd \
-		--with-freetype \
-		--with-jpeg \
-		--with-xpm \
-    && docker-php-ext-install pdo_mysql zip gd soap \
-    && pecl install imagick \
-    && docker-php-ext-enable imagick \
-    && rm -rf /var/lib/apt/lists/*
+  mariadb-client \
+  zlib1g-dev \
+  libfreetype6-dev \
+  libjpeg62-turbo-dev \
+  libpng-dev \
+  libxpm-dev \
+  libmagickwand-dev \
+  zip \
+  libzip-dev \
+  vim \
+  netcat-openbsd \
+  iputils-ping \
+  wget \
+  python3 \
+  cron \
+  && docker-php-ext-configure gd \
+  --with-freetype \
+  --with-jpeg \
+  --with-xpm \
+  && docker-php-ext-install pdo_mysql zip gd soap \
+  && pecl install imagick \
+  && docker-php-ext-enable imagick \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY . /var/www/html
 
