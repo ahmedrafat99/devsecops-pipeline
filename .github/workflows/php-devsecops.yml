@@ -59,6 +59,7 @@ jobs:
           tools: composer
 
       - name: Secrets scan - Gitleaks (SARIF)
+        id: gitleaks_step
         shell: bash
         run: |
           docker run --rm -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}:/repo" zricethezav/gitleaks:latest detect \
@@ -111,6 +112,7 @@ jobs:
         continue-on-error: true
 
       - name: SAST - Semgrep (SARIF)
+        id: semgrep_step
         shell: bash
         run: |
           python -m pip install --upgrade pip semgrep
@@ -118,6 +120,7 @@ jobs:
         continue-on-error: true
 
       - name: SCA - Trivy filesystem scan
+        id: trivy_deps_step
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
@@ -134,6 +137,7 @@ jobs:
         continue-on-error: true
 
       - name: Container scan - Trivy image (SARIF)
+        id: trivy_image_step
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: vulnerable-php:ci
@@ -160,6 +164,7 @@ jobs:
         continue-on-error: true
 
       - name: DAST - OWASP ZAP baseline scan
+        id: zap_step
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -237,8 +242,15 @@ jobs:
         if: always()
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
+        env:
+          SEMGREP_OUTCOME: ${{ steps.semgrep_step.outcome }}
+          TRIVY_DEPS_OUTCOME: ${{ steps.trivy_deps_step.outcome }}
+          TRIVY_IMAGE_OUTCOME: ${{ steps.trivy_image_step.outcome }}
+          GITLEAKS_OUTCOME: ${{ steps.gitleaks_step.outcome }}
+          ZAP_OUTCOME: ${{ steps.zap_step.outcome }}
         run: |
           python - <<'PY'
+          import os
           import json
           import re
           from collections import Counter
@@ -267,12 +279,14 @@ jobs:
           def parse_sarif(name: str):
             data = load_json(name)
             if not data:
-              return {"status": "missing", "total": 0, "levels": {}, "top_rules": []}
+              return {"status": "missing_file", "total": 0, "levels": {}, "top_rules": []}
             runs = data.get("runs", [])
             if not runs:
-              return {"status": "empty", "total": 0, "levels": {}, "top_rules": []}
+              return {"status": "no_runs", "total": 0, "levels": {}, "top_rules": []}
             run = runs[0]
             results = run.get("results", []) or []
+            if not results:
+              return {"status": "no_findings", "total": 0, "levels": {}, "top_rules": [], "severities": {}}
             rules = run.get("tool", {}).get("driver", {}).get("rules", []) or []
             default_level = {r.get("id"): r.get("defaultConfiguration", {}).get("level") for r in rules}
             # Prefer tool-provided severity tags when available (e.g., Trivy).
@@ -405,9 +419,30 @@ jobs:
           trivy_image = parse_sarif("trivy-image.sarif")
           gitleaks = parse_sarif("gitleaks.sarif")
           trufflehog_text = parse_trufflehog()
+          semgrep_outcome = (os.getenv("SEMGREP_OUTCOME") or "").strip()
+          trivy_deps_outcome = (os.getenv("TRIVY_DEPS_OUTCOME") or "").strip()
+          trivy_image_outcome = (os.getenv("TRIVY_IMAGE_OUTCOME") or "").strip()
+          gitleaks_outcome = (os.getenv("GITLEAKS_OUTCOME") or "").strip()
+          zap_outcome = (os.getenv("ZAP_OUTCOME") or "").strip()
 
           def sev_count(obj: dict, key: str) -> int:
             return int(obj.get("severities", {}).get(key, 0))
+
+          def tool_status(sarif_obj: dict, step_outcome: str) -> str:
+            if step_outcome == "failure":
+              return "failed"
+            if step_outcome == "cancelled":
+              return "cancelled"
+            if step_outcome == "skipped":
+              return "skipped"
+            status = sarif_obj.get("status", "unknown")
+            if status == "ok":
+              return "ok"
+            if status == "no_findings":
+              return "no_findings"
+            if status in {"missing_file", "no_runs"}:
+              return "missing_report"
+            return status
 
           def level_text(obj: dict) -> str:
             return ", ".join(f"{k.upper()}:{v}" for k, v in obj.get("levels", {}).items()) if obj.get("levels") else "-"
@@ -427,16 +462,16 @@ jobs:
               f"- Project directory: `{project_dir}`",
               f"- Composer file detected: `{'Yes' if has_composer else 'No'}`",
               "",
-              "| Tool | Findings | Critical | High | Medium | Low | Notes |",
-              "|---|---:|---:|---:|---:|---:|---|",
-              f"| Composer audit | - | - | - | - | - | {parse_composer()} |",
-              f"| PHP lint | - | - | - | - | - | {parse_php_lint()} |",
-              f"| Semgrep (SARIF) | {semgrep['total']} | {sev_count(semgrep, 'CRITICAL')} | {sev_count(semgrep, 'HIGH')} | {sev_count(semgrep, 'MEDIUM')} | {sev_count(semgrep, 'LOW')} | levels={level_text(semgrep)}; top={top_text(semgrep)} |",
-              f"| Trivy deps (SARIF) | {trivy_deps['total']} | {sev_count(trivy_deps, 'CRITICAL')} | {sev_count(trivy_deps, 'HIGH')} | {sev_count(trivy_deps, 'MEDIUM')} | {sev_count(trivy_deps, 'LOW')} | levels={level_text(trivy_deps)}; top={top_text(trivy_deps)} |",
-              f"| Trivy image (SARIF) | {trivy_image['total']} | {sev_count(trivy_image, 'CRITICAL')} | {sev_count(trivy_image, 'HIGH')} | {sev_count(trivy_image, 'MEDIUM')} | {sev_count(trivy_image, 'LOW')} | levels={level_text(trivy_image)}; top={top_text(trivy_image)} |",
-              f"| Gitleaks (SARIF) | {gitleaks['total']} | {sev_count(gitleaks, 'CRITICAL')} | {sev_count(gitleaks, 'HIGH')} | {sev_count(gitleaks, 'MEDIUM')} | {sev_count(gitleaks, 'LOW')} | levels={level_text(gitleaks)}; top={top_text(gitleaks)} |",
-              f"| TruffleHog (JSON) | {trufflehog_text.replace('findings=', '') if trufflehog_text.startswith('findings=') else '-'} | - | - | - | - | {trufflehog_text} |",
-              f"| OWASP ZAP (JSON) | {zap.get('alerts', '-')} ({zap.get('instances', '-')}) | {zap.get('critical', 0) if zap.get('status') == 'available' else '-'} | {zap.get('high', 0) if zap.get('status') == 'available' else '-'} | {zap.get('medium', 0) if zap.get('status') == 'available' else '-'} | {zap.get('low', 0) if zap.get('status') == 'available' else '-'} | levels={zap.get('levels', '-')}; status={zap.get('status', '-')} {('; ' + zap.get('notes')) if zap.get('notes') else ''} |",
+              "| Tool | Status | Findings | Critical | High | Medium | Low | Notes |",
+              "|---|---|---:|---:|---:|---:|---:|---|",
+              f"| Composer audit | {'ok' if parse_composer() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_composer()} |",
+              f"| PHP lint | {'ok' if parse_php_lint() != 'missing' else 'missing_report'} | - | - | - | - | - | {parse_php_lint()} |",
+              f"| Semgrep (SARIF) | {tool_status(semgrep, semgrep_outcome)} | {semgrep['total']} | {sev_count(semgrep, 'CRITICAL')} | {sev_count(semgrep, 'HIGH')} | {sev_count(semgrep, 'MEDIUM')} | {sev_count(semgrep, 'LOW')} | step={semgrep_outcome or '-'}; levels={level_text(semgrep)}; top={top_text(semgrep)} |",
+              f"| Trivy deps (SARIF) | {tool_status(trivy_deps, trivy_deps_outcome)} | {trivy_deps['total']} | {sev_count(trivy_deps, 'CRITICAL')} | {sev_count(trivy_deps, 'HIGH')} | {sev_count(trivy_deps, 'MEDIUM')} | {sev_count(trivy_deps, 'LOW')} | step={trivy_deps_outcome or '-'}; levels={level_text(trivy_deps)}; top={top_text(trivy_deps)} |",
+              f"| Trivy image (SARIF) | {tool_status(trivy_image, trivy_image_outcome)} | {trivy_image['total']} | {sev_count(trivy_image, 'CRITICAL')} | {sev_count(trivy_image, 'HIGH')} | {sev_count(trivy_image, 'MEDIUM')} | {sev_count(trivy_image, 'LOW')} | step={trivy_image_outcome or '-'}; levels={level_text(trivy_image)}; top={top_text(trivy_image)} |",
+              f"| Gitleaks (SARIF) | {tool_status(gitleaks, gitleaks_outcome)} | {gitleaks['total']} | {sev_count(gitleaks, 'CRITICAL')} | {sev_count(gitleaks, 'HIGH')} | {sev_count(gitleaks, 'MEDIUM')} | {sev_count(gitleaks, 'LOW')} | step={gitleaks_outcome or '-'}; levels={level_text(gitleaks)}; top={top_text(gitleaks)} |",
+              f"| TruffleHog (JSON) | {'ok' if trufflehog_text.startswith('findings=') else 'missing_report'} | {trufflehog_text.replace('findings=', '') if trufflehog_text.startswith('findings=') else '-'} | - | - | - | - | {trufflehog_text} |",
+              f"| OWASP ZAP (JSON) | {'failed' if zap_outcome == 'failure' else zap.get('status', '-')} | {zap.get('alerts', '-')} ({zap.get('instances', '-')}) | {zap.get('critical', 0) if zap.get('status') == 'available' else '-'} | {zap.get('high', 0) if zap.get('status') == 'available' else '-'} | {zap.get('medium', 0) if zap.get('status') == 'available' else '-'} | {zap.get('low', 0) if zap.get('status') == 'available' else '-'} | step={zap_outcome or '-'}; levels={zap.get('levels', '-')}; status={zap.get('status', '-')} {('; ' + zap.get('notes')) if zap.get('notes') else ''} |",
               "",
               "## Files",
           ]
