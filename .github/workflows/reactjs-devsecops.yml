@@ -341,12 +341,14 @@ jobs:
                 pass
             return f"findings={findings}"
 
-          def parse_zap():
-            data = load_json("zap-report.json")
+          def parse_zap(name: str):
+            data = load_json(name)
             if not data:
-              return "missing"
+              return {"status": "missing", "notes": "report missing"}
             if isinstance(data, dict) and data.get("status") == "missing":
-              return f"missing ({data.get('message', 'no message')})"
+              return {"status": "missing", "notes": data.get("message", "no message")}
+            if isinstance(data, dict) and data.get("status") == "skipped":
+              return {"status": "skipped", "notes": data.get("message", "DAST skipped")}
             sites = data.get("site", []) if isinstance(data, dict) else []
             risk_map = {"0": "info", "1": "low", "2": "medium", "3": "high"}
             levels = Counter()
@@ -363,12 +365,19 @@ jobs:
                 levels[risk] += n
                 instances += n
             lv = ", ".join(f"{k}:{v}" for k, v in sorted(levels.items())) if levels else "-"
-            return f"alerts={alert_types}; instances={instances}; levels={lv}"
+            return {"status": "available", "alerts": alert_types, "instances": instances, "levels": lv}
+
+          def zap_line(z: dict, outcome: str) -> str:
+            if z.get("status") == "available":
+              return f"status=available; alerts={z.get('alerts', '-')}; instances={z.get('instances', '-')}; levels={z.get('levels', '-')}; step={outcome}"
+            return f"status={z.get('status', 'missing')}; step={outcome}; {z.get('notes', 'report missing')}"
 
           semgrep = parse_sarif("semgrep.sarif")
           trivy_deps = parse_sarif("trivy-deps.sarif")
           trivy_image = parse_sarif("trivy-image.sarif")
           gitleaks = parse_sarif("gitleaks.sarif")
+          zap_baseline = parse_zap("zap-baseline-report.json")
+          zap_full = parse_zap("zap-report.json")
 
           lines = [
             "# ReactJS DevSecOps Summary",
@@ -383,7 +392,8 @@ jobs:
             f"| Trivy image (SARIF) | {sarif_line('trivy-image', trivy_image)} |",
             f"| Gitleaks (SARIF) | {sarif_line('gitleaks', gitleaks)} |",
             f"| TruffleHog (JSON) | {parse_trufflehog()} |",
-            f"| OWASP ZAP (JSON) | {parse_zap()}; steps=baseline:{zap_base_outcome}, full:{zap_full_outcome} |",
+            f"| OWASP ZAP Baseline (JSON) | {zap_line(zap_baseline, zap_base_outcome)} |",
+            f"| OWASP ZAP Full (active, JSON) | {zap_line(zap_full, zap_full_outcome)} |",
             "",
             "## Files",
           ]

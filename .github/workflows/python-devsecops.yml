@@ -453,13 +453,13 @@ jobs:
                   ids.add(str(vid))
             return {"dependencies": len(deps), "vulnerabilities": vuln_count, "unique_ids": len(ids)}
 
-          def parse_zap():
-            path = report_dir / "zap-report.json"
+          def parse_zap(name: str):
+            path = report_dir / name
             if not path.exists():
-              return None
+              return {"status": "missing", "message": "report missing"}
             raw = path.read_text(encoding="utf-8", errors="replace").strip()
             if not raw:
-              return None
+              return {"status": "missing", "message": "report missing"}
             try:
               data = json.loads(raw)
             except json.JSONDecodeError:
@@ -489,7 +489,8 @@ jobs:
           tests = parse_tests()
           trufflehog = parse_trufflehog()
           pip_audit = parse_pip_audit()
-          zap = parse_zap()
+          zap_baseline = parse_zap("zap-baseline-report.json")
+          zap_full = parse_zap("zap-report.json")
           trivy_deps_sev = parse_trivy_severity("trivy-deps.sarif")
           trivy_image_sev = parse_trivy_severity("trivy-image.sarif")
 
@@ -504,6 +505,13 @@ jobs:
             order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
             return ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj["severities"])
 
+          def fmt_zap(obj, outcome: str) -> str:
+            if obj and obj.get("status") == "available":
+              return f"report=available; alerts={obj.get('alerts', 'N/A')}; levels={fmt_levels(obj)}; step={outcome}"
+            if obj:
+              return f"status={obj.get('status', 'missing')}; step={outcome}; {obj.get('message', 'report missing')}"
+            return f"status=missing; step={outcome}; report missing"
+
           lines = [
             "# DevSecOps Report Summary",
             "",
@@ -517,10 +525,8 @@ jobs:
               f"dependencies={pip_audit['dependencies']}; vulnerabilities={pip_audit['vulnerabilities']}; advisories={pip_audit['unique_ids']}" if pip_audit and not pip_audit.get('missing')
               else (pip_audit.get('message', 'N/A') if pip_audit else 'N/A')
             ) + " |",
-            f"| OWASP ZAP (DAST) | " + (
-              f"report=available; alerts={zap.get('alerts', 'N/A')}; levels={fmt_levels(zap)}; steps=baseline:{zap_base_outcome}, full:{zap_full_outcome}" if zap and zap.get("status") == "available"
-              else (zap.get("message", "report missing") if zap else "N/A")
-            ) + " |",
+            f"| OWASP ZAP Baseline (DAST) | {fmt_zap(zap_baseline, zap_base_outcome)} |",
+            f"| OWASP ZAP Full (active) | {fmt_zap(zap_full, zap_full_outcome)} |",
             f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)}; severities={fmt_sev(semgrep)} |",
             f"| Trivy deps (SARIF) | findings={trivy_deps['total'] if trivy_deps else 'N/A'}; levels={fmt_levels(trivy_deps)}; severities={', '.join([f'{k}:{v}' for k,v in (trivy_deps_sev or {}).items()]) if trivy_deps_sev else 'N/A'} |",
             f"| Trivy image (SARIF) | findings={trivy_image['total'] if trivy_image else 'N/A'}; levels={fmt_levels(trivy_image)}; severities={', '.join([f'{k}:{v}' for k,v in (trivy_image_sev or {}).items()]) if trivy_image_sev else 'N/A'} |",

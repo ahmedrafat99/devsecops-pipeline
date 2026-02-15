@@ -438,8 +438,8 @@ jobs:
                 pass
             return f"findings={findings}"
 
-          def parse_zap():
-            data = load_json("zap-report.json")
+          def parse_zap(name: str):
+            data = load_json(name)
             if not data:
               return {"status": "missing", "notes": "report not found"}
             if isinstance(data, dict) and data.get("status") == "missing":
@@ -523,7 +523,30 @@ jobs:
               return rule_id[:37] + "..."
             return ", ".join(f"{short_rule(r)}:{c}" for r, c in obj.get("top_rules", [])[:2]) or "-"
 
-          zap = parse_zap()
+          def zap_status(zap_obj: dict, step_outcome: str) -> str:
+            if step_outcome == "failure":
+              return "failed"
+            if step_outcome == "cancelled":
+              return "cancelled"
+            if step_outcome == "skipped":
+              return "skipped"
+            return zap_obj.get("status", "unknown")
+
+          def zap_row(tool_name: str, zap_obj: dict, step_outcome: str) -> str:
+            available = zap_obj.get("status") == "available"
+            return (
+              f"| {tool_name} | {zap_status(zap_obj, step_outcome)} | "
+              f"{zap_obj.get('alerts', '-') if available else '-'} ({zap_obj.get('instances', '-') if available else '-'}) | "
+              f"{zap_obj.get('critical', 0) if available else '-'} | "
+              f"{zap_obj.get('high', 0) if available else '-'} | "
+              f"{zap_obj.get('medium', 0) if available else '-'} | "
+              f"{zap_obj.get('low', 0) if available else '-'} | "
+              f"step={step_outcome or '-'}; levels={zap_obj.get('levels', '-')}; status={zap_obj.get('status', '-')} "
+              f"{('; ' + zap_obj.get('notes')) if zap_obj.get('notes') else ''} |"
+            )
+
+          zap_baseline = parse_zap("zap-baseline-report.json")
+          zap_full = parse_zap("zap-report.json")
 
           lines = [
               "# PHP DevSecOps Summary",
@@ -537,7 +560,8 @@ jobs:
               f"| Trivy image (SARIF) | {tool_status(trivy_image, trivy_image_outcome)} | {trivy_image['total']} | {sev_count(trivy_image, 'CRITICAL')} | {sev_count(trivy_image, 'HIGH')} | {sev_count(trivy_image, 'MEDIUM')} | {sev_count(trivy_image, 'LOW')} | step={trivy_image_outcome or '-'}; levels={level_text(trivy_image)}; top={top_text(trivy_image)} |",
               f"| Gitleaks (SARIF) | {tool_status(gitleaks, gitleaks_outcome)} | {gitleaks['total']} | {sev_count(gitleaks, 'CRITICAL')} | {sev_count(gitleaks, 'HIGH')} | {sev_count(gitleaks, 'MEDIUM')} | {sev_count(gitleaks, 'LOW')} | step={gitleaks_outcome or '-'}; levels={level_text(gitleaks)}; top={top_text(gitleaks)} |",
               f"| TruffleHog (JSON) | {'ok' if trufflehog_text.startswith('findings=') else 'missing_report'} | {trufflehog_text.replace('findings=', '') if trufflehog_text.startswith('findings=') else '-'} | - | - | - | - | {trufflehog_text} |",
-              f"| OWASP ZAP (JSON) | {zap.get('status', '-')} | {zap.get('alerts', '-')} ({zap.get('instances', '-')}) | {zap.get('critical', 0) if zap.get('status') == 'available' else '-'} | {zap.get('high', 0) if zap.get('status') == 'available' else '-'} | {zap.get('medium', 0) if zap.get('status') == 'available' else '-'} | {zap.get('low', 0) if zap.get('status') == 'available' else '-'} | steps=baseline:{zap_base_outcome or '-'}, full:{zap_full_outcome or '-'}; levels={zap.get('levels', '-')}; status={zap.get('status', '-')} {('; ' + zap.get('notes')) if zap.get('notes') else ''} |",
+              zap_row("OWASP ZAP Baseline (JSON)", zap_baseline, zap_base_outcome),
+              zap_row("OWASP ZAP Full (active, JSON)", zap_full, zap_full_outcome),
               "",
               "## Files",
           ]
