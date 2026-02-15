@@ -197,7 +197,7 @@ jobs:
 
       # OWASP ZAP baseline: DAST scan against a live running app endpoint.
       - name: DAST - OWASP ZAP baseline scan
-        if: github.event_name != 'workflow_dispatch'
+        id: zap_baseline_step
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
           docker run --rm --network zap-net \
@@ -212,8 +212,19 @@ jobs:
             -I
         continue-on-error: true
 
+      - name: Preserve ZAP baseline artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          [ -f "$REPORT_DIR/zap-report.html" ] && cp "$REPORT_DIR/zap-report.html" "$REPORT_DIR/zap-baseline-report.html" || true
+          [ -f "$REPORT_DIR/zap-report.json" ] && cp "$REPORT_DIR/zap-report.json" "$REPORT_DIR/zap-baseline-report.json" || true
+          [ -f "$REPORT_DIR/zap-report.xml" ] && cp "$REPORT_DIR/zap-report.xml" "$REPORT_DIR/zap-baseline-report.xml" || true
+          [ -f "$REPORT_DIR/zap-warnings.md" ] && cp "$REPORT_DIR/zap-warnings.md" "$REPORT_DIR/zap-baseline-warnings.md" || true
+
       - name: DAST - OWASP ZAP full (active) scan
-        if: github.event_name == 'workflow_dispatch'
+        id: zap_full_step
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
           docker run --rm --network zap-net \
@@ -269,6 +280,8 @@ jobs:
         shell: bash
         env:
           REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+          ZAP_BASE_OUTCOME: ${{ steps.zap_baseline_step.outcome }}
+          ZAP_FULL_OUTCOME: ${{ steps.zap_full_step.outcome }}
         run: |
           python - <<'PY'
           import json
@@ -279,6 +292,8 @@ jobs:
 
           report_dir = Path(os.environ["REPORT_DIR"])
           summary_path = report_dir / "summary.md"
+          zap_base_outcome = os.environ.get("ZAP_BASE_OUTCOME", "").strip() or "unknown"
+          zap_full_outcome = os.environ.get("ZAP_FULL_OUTCOME", "").strip() or "unknown"
 
           def read_text(name: str) -> str:
             path = report_dir / name
@@ -503,7 +518,7 @@ jobs:
               else (pip_audit.get('message', 'N/A') if pip_audit else 'N/A')
             ) + " |",
             f"| OWASP ZAP (DAST) | " + (
-              f"report=available; alerts={zap.get('alerts', 'N/A')}; levels={fmt_levels(zap)}" if zap and zap.get("status") == "available"
+              f"report=available; alerts={zap.get('alerts', 'N/A')}; levels={fmt_levels(zap)}; steps=baseline:{zap_base_outcome}, full:{zap_full_outcome}" if zap and zap.get("status") == "available"
               else (zap.get("message", "report missing") if zap else "N/A")
             ) + " |",
             f"| Semgrep (SARIF) | findings={semgrep['total'] if semgrep else 'N/A'}; levels={fmt_levels(semgrep)}; severities={fmt_sev(semgrep)} |",

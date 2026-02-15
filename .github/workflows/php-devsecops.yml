@@ -203,7 +203,7 @@ jobs:
 
       - name: DAST - OWASP ZAP baseline scan
         id: zap_step
-        if: steps.start_app_step.outcome == 'success' && github.event_name != 'workflow_dispatch'
+        if: steps.start_app_step.outcome == 'success'
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -219,9 +219,20 @@ jobs:
             -I
         continue-on-error: true
 
+      - name: Preserve ZAP baseline artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          [ -f "$REPORT_DIR/zap-report.html" ] && cp "$REPORT_DIR/zap-report.html" "$REPORT_DIR/zap-baseline-report.html" || true
+          [ -f "$REPORT_DIR/zap-report.json" ] && cp "$REPORT_DIR/zap-report.json" "$REPORT_DIR/zap-baseline-report.json" || true
+          [ -f "$REPORT_DIR/zap-report.xml" ] && cp "$REPORT_DIR/zap-report.xml" "$REPORT_DIR/zap-baseline-report.xml" || true
+          [ -f "$REPORT_DIR/zap-warnings.md" ] && cp "$REPORT_DIR/zap-warnings.md" "$REPORT_DIR/zap-baseline-warnings.md" || true
+
       - name: DAST - OWASP ZAP full (active) scan
         id: zap_full_step
-        if: steps.start_app_step.outcome == 'success' && github.event_name == 'workflow_dispatch'
+        if: steps.start_app_step.outcome == 'success'
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -325,7 +336,6 @@ jobs:
           TRIVY_DEPS_OUTCOME: ${{ steps.trivy_deps_step.outcome }}
           TRIVY_IMAGE_OUTCOME: ${{ steps.trivy_image_step.outcome }}
           GITLEAKS_OUTCOME: ${{ steps.gitleaks_step.outcome }}
-          EVENT_NAME: ${{ github.event_name }}
           ZAP_BASE_OUTCOME: ${{ steps.zap_step.outcome }}
           ZAP_FULL_OUTCOME: ${{ steps.zap_full_step.outcome }}
         run: |
@@ -481,10 +491,8 @@ jobs:
           trivy_deps_outcome = (os.getenv("TRIVY_DEPS_OUTCOME") or "").strip()
           trivy_image_outcome = (os.getenv("TRIVY_IMAGE_OUTCOME") or "").strip()
           gitleaks_outcome = (os.getenv("GITLEAKS_OUTCOME") or "").strip()
-          event_name = (os.getenv("EVENT_NAME") or "").strip()
           zap_base_outcome = (os.getenv("ZAP_BASE_OUTCOME") or "").strip()
           zap_full_outcome = (os.getenv("ZAP_FULL_OUTCOME") or "").strip()
-          zap_outcome = zap_full_outcome if event_name == "workflow_dispatch" else zap_base_outcome
 
           def sev_count(obj: dict, key: str) -> int:
             return int(obj.get("severities", {}).get(key, 0))
@@ -529,7 +537,7 @@ jobs:
               f"| Trivy image (SARIF) | {tool_status(trivy_image, trivy_image_outcome)} | {trivy_image['total']} | {sev_count(trivy_image, 'CRITICAL')} | {sev_count(trivy_image, 'HIGH')} | {sev_count(trivy_image, 'MEDIUM')} | {sev_count(trivy_image, 'LOW')} | step={trivy_image_outcome or '-'}; levels={level_text(trivy_image)}; top={top_text(trivy_image)} |",
               f"| Gitleaks (SARIF) | {tool_status(gitleaks, gitleaks_outcome)} | {gitleaks['total']} | {sev_count(gitleaks, 'CRITICAL')} | {sev_count(gitleaks, 'HIGH')} | {sev_count(gitleaks, 'MEDIUM')} | {sev_count(gitleaks, 'LOW')} | step={gitleaks_outcome or '-'}; levels={level_text(gitleaks)}; top={top_text(gitleaks)} |",
               f"| TruffleHog (JSON) | {'ok' if trufflehog_text.startswith('findings=') else 'missing_report'} | {trufflehog_text.replace('findings=', '') if trufflehog_text.startswith('findings=') else '-'} | - | - | - | - | {trufflehog_text} |",
-              f"| OWASP ZAP (JSON) | {'failed' if zap_outcome == 'failure' else zap.get('status', '-')} | {zap.get('alerts', '-')} ({zap.get('instances', '-')}) | {zap.get('critical', 0) if zap.get('status') == 'available' else '-'} | {zap.get('high', 0) if zap.get('status') == 'available' else '-'} | {zap.get('medium', 0) if zap.get('status') == 'available' else '-'} | {zap.get('low', 0) if zap.get('status') == 'available' else '-'} | step={zap_outcome or '-'}; levels={zap.get('levels', '-')}; status={zap.get('status', '-')} {('; ' + zap.get('notes')) if zap.get('notes') else ''} |",
+              f"| OWASP ZAP (JSON) | {zap.get('status', '-')} | {zap.get('alerts', '-')} ({zap.get('instances', '-')}) | {zap.get('critical', 0) if zap.get('status') == 'available' else '-'} | {zap.get('high', 0) if zap.get('status') == 'available' else '-'} | {zap.get('medium', 0) if zap.get('status') == 'available' else '-'} | {zap.get('low', 0) if zap.get('status') == 'available' else '-'} | steps=baseline:{zap_base_outcome or '-'}, full:{zap_full_outcome or '-'}; levels={zap.get('levels', '-')}; status={zap.get('status', '-')} {('; ' + zap.get('notes')) if zap.get('notes') else ''} |",
               "",
               "## Files",
           ]

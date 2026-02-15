@@ -136,7 +136,7 @@ jobs:
         continue-on-error: true
 
       - name: DAST - OWASP ZAP baseline scan
-        if: github.event_name != 'workflow_dispatch'
+        id: zap_baseline_step
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -152,8 +152,19 @@ jobs:
             -I
         continue-on-error: true
 
+      - name: Preserve ZAP baseline artifacts
+        if: always()
+        shell: bash
+        env:
+          REPORT_DIR: ${{ steps.project.outputs.dir }}/reports
+        run: |
+          [ -f "$REPORT_DIR/zap-report.html" ] && cp "$REPORT_DIR/zap-report.html" "$REPORT_DIR/zap-baseline-report.html" || true
+          [ -f "$REPORT_DIR/zap-report.json" ] && cp "$REPORT_DIR/zap-report.json" "$REPORT_DIR/zap-baseline-report.json" || true
+          [ -f "$REPORT_DIR/zap-report.xml" ] && cp "$REPORT_DIR/zap-report.xml" "$REPORT_DIR/zap-baseline-report.xml" || true
+          [ -f "$REPORT_DIR/zap-warnings.md" ] && cp "$REPORT_DIR/zap-warnings.md" "$REPORT_DIR/zap-baseline-warnings.md" || true
+
       - name: DAST - OWASP ZAP full (active) scan
-        if: github.event_name == 'workflow_dispatch'
+        id: zap_full_step
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -233,15 +244,21 @@ jobs:
         if: always()
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
+        env:
+          ZAP_BASE_OUTCOME: ${{ steps.zap_baseline_step.outcome }}
+          ZAP_FULL_OUTCOME: ${{ steps.zap_full_step.outcome }}
         run: |
           python - <<'PY'
           import json
+          import os
           from collections import Counter
           from pathlib import Path
 
           report_dir = Path("reports")
           report_dir.mkdir(exist_ok=True)
           project_dir = "${{ steps.project.outputs.dir }}"
+          zap_base_outcome = os.environ.get("ZAP_BASE_OUTCOME", "").strip() or "unknown"
+          zap_full_outcome = os.environ.get("ZAP_FULL_OUTCOME", "").strip() or "unknown"
 
           def read(name: str) -> str:
             p = report_dir / name
@@ -366,7 +383,7 @@ jobs:
             f"| Trivy image (SARIF) | {sarif_line('trivy-image', trivy_image)} |",
             f"| Gitleaks (SARIF) | {sarif_line('gitleaks', gitleaks)} |",
             f"| TruffleHog (JSON) | {parse_trufflehog()} |",
-            f"| OWASP ZAP (JSON) | {parse_zap()} |",
+            f"| OWASP ZAP (JSON) | {parse_zap()}; steps=baseline:{zap_base_outcome}, full:{zap_full_outcome} |",
             "",
             "## Files",
           ]
