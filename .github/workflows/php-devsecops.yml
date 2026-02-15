@@ -203,7 +203,7 @@ jobs:
 
       - name: DAST - OWASP ZAP baseline scan
         id: zap_step
-        if: steps.start_app_step.outcome == 'success'
+        if: steps.start_app_step.outcome == 'success' && github.event_name != 'workflow_dispatch'
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -212,6 +212,26 @@ jobs:
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://php-app \
+            -r zap-report.html \
+            -J zap-report.json \
+            -x zap-report.xml \
+            -w zap-warnings.md \
+            -I
+        continue-on-error: true
+
+      - name: DAST - OWASP ZAP full (active) scan
+        id: zap_full_step
+        if: steps.start_app_step.outcome == 'success' && github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
+          docker run --rm --network zap-net \
+            --user root \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t http://php-app \
+            -m 5 \
+            -a \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
@@ -305,7 +325,9 @@ jobs:
           TRIVY_DEPS_OUTCOME: ${{ steps.trivy_deps_step.outcome }}
           TRIVY_IMAGE_OUTCOME: ${{ steps.trivy_image_step.outcome }}
           GITLEAKS_OUTCOME: ${{ steps.gitleaks_step.outcome }}
-          ZAP_OUTCOME: ${{ steps.zap_step.outcome }}
+          EVENT_NAME: ${{ github.event_name }}
+          ZAP_BASE_OUTCOME: ${{ steps.zap_step.outcome }}
+          ZAP_FULL_OUTCOME: ${{ steps.zap_full_step.outcome }}
         run: |
           python - <<'PY'
           import os
@@ -459,7 +481,10 @@ jobs:
           trivy_deps_outcome = (os.getenv("TRIVY_DEPS_OUTCOME") or "").strip()
           trivy_image_outcome = (os.getenv("TRIVY_IMAGE_OUTCOME") or "").strip()
           gitleaks_outcome = (os.getenv("GITLEAKS_OUTCOME") or "").strip()
-          zap_outcome = (os.getenv("ZAP_OUTCOME") or "").strip()
+          event_name = (os.getenv("EVENT_NAME") or "").strip()
+          zap_base_outcome = (os.getenv("ZAP_BASE_OUTCOME") or "").strip()
+          zap_full_outcome = (os.getenv("ZAP_FULL_OUTCOME") or "").strip()
+          zap_outcome = zap_full_outcome if event_name == "workflow_dispatch" else zap_base_outcome
 
           def sev_count(obj: dict, key: str) -> int:
             return int(obj.get("severities", {}).get(key, 0))

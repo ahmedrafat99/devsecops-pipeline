@@ -136,6 +136,7 @@ jobs:
         continue-on-error: true
 
       - name: DAST - OWASP ZAP baseline scan
+        if: github.event_name != 'workflow_dispatch'
         shell: bash
         run: |
           chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
@@ -144,6 +145,25 @@ jobs:
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://reactjs-app:3000 \
+            -r zap-report.html \
+            -J zap-report.json \
+            -x zap-report.xml \
+            -w zap-warnings.md \
+            -I
+        continue-on-error: true
+
+      - name: DAST - OWASP ZAP full (active) scan
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          chmod -R 777 "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports" || true
+          docker run --rm --network zap-net \
+            --user root \
+            -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t http://reactjs-app:3000 \
+            -m 5 \
+            -a \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
