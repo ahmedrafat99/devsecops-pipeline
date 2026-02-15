@@ -1,4 +1,5 @@
 name: DevSecOps Pipeline
+# trigger: manual touch to run workflow
 
 on:
   push:

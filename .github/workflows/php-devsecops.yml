@@ -1,4 +1,5 @@
 name: PHP DevSecOps Pipeline
+# trigger: manual touch to run workflow
 
 on:
   push:
