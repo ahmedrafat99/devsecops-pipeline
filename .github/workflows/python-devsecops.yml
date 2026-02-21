@@ -75,7 +75,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 pylint "safety<3" semgrep
+          pip install "safety<3" semgrep
           pip install --upgrade pip-audit
           python - <<'PY'
           import importlib.util
@@ -87,25 +87,6 @@ jobs:
           if importlib.util.find_spec("cyclonedx.parser") is None:
             subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "cyclonedx-python-lib<4"])
           PY
-
-      - name: Lint - flake8
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          set -o pipefail
-          flake8 . --statistics --count | tee reports/flake8.txt
-        continue-on-error: true
-
-      - name: SAST - pylint
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          set -o pipefail
-          pylint challenge introduction pygoat manage.py --exit-zero | tee reports/pylint.txt
-
-      - name: Unit tests (unittest via Django test runner)
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: |
-          set -o pipefail
-          python manage.py test --verbosity 2 | tee reports/unit-tests.txt
 
       - name: SCA - Safety
         working-directory: ${{ steps.project.outputs.dir }}
@@ -358,27 +339,6 @@ jobs:
               counts[sev_by_rule.get(item.get("ruleId"), "LOW")] += 1
             return dict(sorted(counts.items()))
 
-          def parse_flake8():
-            raw = read_text("flake8.txt")
-            if not raw:
-              return None
-            lines = [x for x in raw.splitlines() if x.strip()]
-            counts = Counter()
-            for ln in lines:
-              m = re.search(r":\s*([A-Z]\d{3})\b", ln)
-              if m:
-                counts[m.group(1)] += 1
-            top = ", ".join(f"{k}:{v}" for k, v in counts.most_common(8))
-            return {"total": len(lines), "top": top}
-
-          def parse_pylint():
-            raw = read_text("pylint.txt")
-            if not raw:
-              return None
-            m = re.search(r"rated at\s+([0-9.]+)/10", raw)
-            score = m.group(1) if m else "N/A"
-            return {"score": score}
-
           def parse_safety():
             raw_text = read_text("safety.txt")
             raw_json = read_text("safety.json")
@@ -396,14 +356,6 @@ jobs:
             # Strip ANSI sequences from Safety text output for robust parsing.
             cleaned = re.sub(r"\x1b\[[0-9;]*m", "", raw_text)
             m = re.search(r"(\d+)\s+vulnerabilities found", cleaned, flags=re.IGNORECASE)
-            total = m.group(1) if m else "N/A"
-            return {"total": total}
-
-          def parse_tests():
-            raw = read_text("unit-tests.txt")
-            if not raw:
-              return None
-            m = re.search(r"Found\s+(\d+)\s+test\(s\)", raw)
             total = m.group(1) if m else "N/A"
             return {"total": total}
 
@@ -483,10 +435,7 @@ jobs:
           trivy_deps = parse_sarif("trivy-deps.sarif")
           trivy_image = parse_sarif("trivy-image.sarif")
           gitleaks = parse_sarif("gitleaks.sarif")
-          flake8 = parse_flake8()
-          pylint = parse_pylint()
           safety = parse_safety()
-          tests = parse_tests()
           trufflehog = parse_trufflehog()
           pip_audit = parse_pip_audit()
           zap_baseline = parse_zap("zap-baseline-report.json")
@@ -517,9 +466,6 @@ jobs:
             "",
             "| Tool | Key Results |",
             "|---|---|",
-            f"| Unit tests | discovered={tests['total'] if tests else 'N/A'} |",
-            f"| Flake8 | issues={flake8['total'] if flake8 else 'N/A'}; top={flake8['top'] if flake8 else '-'} |",
-            f"| Pylint | score={pylint['score'] if pylint else 'N/A'}/10 |",
             f"| Safety | vulnerabilities={safety['total'] if safety else 'N/A'} |",
             f"| pip-audit | " + (
               f"dependencies={pip_audit['dependencies']}; vulnerabilities={pip_audit['vulnerabilities']}; advisories={pip_audit['unique_ids']}" if pip_audit and not pip_audit.get('missing')

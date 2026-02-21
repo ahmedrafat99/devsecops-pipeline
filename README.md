@@ -14,13 +14,11 @@ All workflows live in `.github/workflows/` and are path-scoped so changes in one
 
 | Workflow | Scope | Main Tools |
 |---|---|---|
-| `python-devsecops.yml` | `python/**` | Unit tests, Flake8, Pylint, Safety, pip-audit, Semgrep, Trivy FS, Trivy Image, Gitleaks, TruffleHog, OWASP ZAP baseline + full(active) |
+| `python-devsecops.yml` | `python/**` | Safety, pip-audit, Semgrep, Trivy FS, Trivy Image, Gitleaks, TruffleHog, OWASP ZAP baseline + full(active) |
 | `php-devsecops.yml` | `php/VulnerableApp-php/**` | Semgrep, Trivy FS, Trivy Image, Gitleaks, TruffleHog, OWASP ZAP baseline + full(active) |
 | `reactjs-devsecops.yml` | `reactjs/**` | npm audit, Semgrep, Trivy FS, Trivy Image, Gitleaks, TruffleHog, OWASP ZAP baseline + full(active) |
 | `python-codeql.yml` | `python/**` | GitHub CodeQL |
 | `reactjs-codeql.yml` | `reactjs/**` | GitHub CodeQL |
-| `python-flake8.yml` | `python/**` | Flake8 |
-| `python-hadolint.yml` | Dockerfile-focused checks | Hadolint |
 
 ## DevSecOps Workflow Details
 
@@ -28,8 +26,6 @@ All workflows live in `.github/workflows/` and are path-scoped so changes in one
 
 - SAST:
   - `semgrep` (SARIF)
-  - `pylint`
-  - `flake8`
 - SCA:
   - `safety`
   - `pip-audit`
