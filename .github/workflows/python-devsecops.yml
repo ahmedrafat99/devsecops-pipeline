@@ -123,6 +123,7 @@ jobs:
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
           semgrep scan --config auto --sarif --output reports/semgrep.sarif .
+          semgrep scan --config auto . > reports/semgrep.txt
         continue-on-error: true
 
       - name: SCA - Trivy filesystem scan (Python dependencies)
