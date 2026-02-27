@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,21 @@ def _read_json(path: Path) -> Any | None:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def _repo_relative_uri(path: Path) -> str:
+    workspace = Path.cwd()
+    env_workspace = workspace
+    # Prefer GitHub workspace when available in Actions runners.
+    if "GITHUB_WORKSPACE" in os.environ:
+        env_workspace = Path(os.environ["GITHUB_WORKSPACE"])
+    try:
+        return path.resolve().relative_to(env_workspace.resolve()).as_posix()
+    except Exception:
+        try:
+            return path.resolve().relative_to(workspace.resolve()).as_posix()
+        except Exception:
+            return path.name
 
 
 def _sev_to_level(sev: str) -> str:
@@ -343,7 +359,8 @@ def _parse_pip_audit(report_dir: Path) -> list[dict[str, Any]]:
 
 
 def _parse_zap(report_dir: Path, json_name: str, prefix: str) -> list[dict[str, Any]]:
-    data = _read_json(report_dir / json_name)
+    json_path = report_dir / json_name
+    data = _read_json(json_path)
     if not isinstance(data, dict):
         return []
     if data.get("status") in {"missing", "skipped"}:
@@ -359,6 +376,7 @@ def _parse_zap(report_dir: Path, json_name: str, prefix: str) -> list[dict[str, 
         "0": "LOW",
     }
     findings: list[dict[str, Any]] = []
+    report_uri = _repo_relative_uri(json_path)
     for site in sites:
         if not isinstance(site, dict):
             continue
@@ -374,13 +392,10 @@ def _parse_zap(report_dir: Path, json_name: str, prefix: str) -> list[dict[str, 
             plugin = str(alert.get("pluginid") or alert.get("alertRef") or alert.get("alert") or "alert")
             instances = alert.get("instances") or []
             first_instance = instances[0] if isinstance(instances, list) and instances else {}
-            uri = ""
+            uri = report_uri
             line = 1
             if isinstance(first_instance, dict):
-                uri = str(first_instance.get("uri") or first_instance.get("url") or "")
                 line = _to_int(first_instance.get("line"), 1)
-            if not uri:
-                uri = str(site.get("name") or "http://target/")
             count = len(instances) if isinstance(instances, list) and instances else 1
             alert_name = str(alert.get("alert") or "OWASP ZAP finding")
             desc = str(alert.get("desc") or "").strip()
