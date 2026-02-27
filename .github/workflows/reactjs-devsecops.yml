@@ -222,6 +222,28 @@ jobs:
           docker rm -f reactjs-app || true
           docker network rm zap-net || true
 
+      - name: Convert supplemental reports to SARIF
+        if: always()
+        shell: bash
+        run: |
+          python scripts/security_json_to_sarif.py \
+            --report-dir "${{ steps.project.outputs.dir }}/reports" \
+            --tools trufflehog,npm-audit,zap-baseline,zap-full
+
+      - name: Ensure report placeholders before SARIF upload
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.sarif ] || echo '{"runs":[]}' > reports/trufflehog.sarif
+          [ -f reports/npm-audit.sarif ] || echo '{"runs":[]}' > reports/npm-audit.sarif
+          [ -f reports/zap-baseline.sarif ] || echo '{"runs":[]}' > reports/zap-baseline.sarif
+          [ -f reports/zap-full.sarif ] || echo '{"runs":[]}' > reports/zap-full.sarif
+
       - name: Upload SARIF - Semgrep
         if: always()
         uses: github/codeql-action/upload-sarif@v4
@@ -252,6 +274,38 @@ jobs:
         with:
           sarif_file: ${{ steps.project.outputs.dir }}/reports/gitleaks.sarif
           category: "/tool:gitleaks/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - TruffleHog
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trufflehog.sarif
+          category: "/tool:trufflehog/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - npm audit
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/npm-audit.sarif
+          category: "/tool:npm-audit/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - OWASP ZAP baseline
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/zap-baseline.sarif
+          category: "/tool:zap-baseline/language:javascript"
+        continue-on-error: true
+
+      - name: Upload SARIF - OWASP ZAP full
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/zap-full.sarif
+          category: "/tool:zap-full/language:javascript"
         continue-on-error: true
 
       - name: Build detailed summary

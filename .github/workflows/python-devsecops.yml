@@ -19,6 +19,7 @@ on:
 permissions:
   contents: read
   actions: read
+  security-events: write
 
 jobs:
   devsecops:
@@ -256,6 +257,101 @@ jobs:
         run: |
           docker rm -f pygoat-app || true
           docker network rm zap-net || true
+
+      - name: Convert supplemental reports to SARIF
+        if: always()
+        shell: bash
+        run: |
+          python scripts/security_json_to_sarif.py \
+            --report-dir "${{ steps.project.outputs.dir }}/reports" \
+            --tools trufflehog,safety,pip-audit,zap-baseline,zap-full
+
+      - name: Ensure report placeholders before SARIF upload
+        if: always()
+        shell: bash
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: |
+          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.sarif ] || echo '{"runs":[]}' > reports/trufflehog.sarif
+          [ -f reports/safety.sarif ] || echo '{"runs":[]}' > reports/safety.sarif
+          [ -f reports/pip-audit.sarif ] || echo '{"runs":[]}' > reports/pip-audit.sarif
+          [ -f reports/zap-baseline.sarif ] || echo '{"runs":[]}' > reports/zap-baseline.sarif
+          [ -f reports/zap-full.sarif ] || echo '{"runs":[]}' > reports/zap-full.sarif
+
+      - name: Upload SARIF - Semgrep
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/semgrep.sarif
+          category: "/tool:semgrep/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - Trivy deps
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-deps.sarif
+          category: "/tool:trivy-deps/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - Trivy image
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trivy-image.sarif
+          category: "/tool:trivy-image/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - Gitleaks
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/gitleaks.sarif
+          category: "/tool:gitleaks/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - TruffleHog
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/trufflehog.sarif
+          category: "/tool:trufflehog/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - Safety
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/safety.sarif
+          category: "/tool:safety/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - pip-audit
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/pip-audit.sarif
+          category: "/tool:pip-audit/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - OWASP ZAP baseline
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/zap-baseline.sarif
+          category: "/tool:zap-baseline/language:python"
+        continue-on-error: true
+
+      - name: Upload SARIF - OWASP ZAP full
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.project.outputs.dir }}/reports/zap-full.sarif
+          category: "/tool:zap-full/language:python"
+        continue-on-error: true
 
       - name: Build consolidated report summary
         if: always()
