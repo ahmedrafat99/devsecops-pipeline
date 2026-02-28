@@ -375,6 +375,12 @@ def _parse_zap(report_dir: Path, json_name: str, prefix: str) -> list[dict[str, 
         "1": "LOW",
         "0": "LOW",
     }
+    confidence_map = {
+        "3": "High",
+        "2": "Medium",
+        "1": "Low",
+        "0": "False Positive",
+    }
     findings: list[dict[str, Any]] = []
     report_uri = _repo_relative_uri(json_path)
     for site in sites:
@@ -390,6 +396,15 @@ def _parse_zap(report_dir: Path, json_name: str, prefix: str) -> list[dict[str, 
             sev = risk_to_sev.get(risk_code, "LOW")
             level = _sev_to_level(sev)
             plugin = str(alert.get("pluginid") or alert.get("alertRef") or alert.get("alert") or "alert")
+            
+            # Extract additional ZAP metadata
+            confidence_code = str(alert.get("confidence") or "2")
+            confidence = confidence_map.get(confidence_code, "Medium")
+            cweid = str(alert.get("cweid") or "")
+            wascid = str(alert.get("wascid") or "")
+            solution = str(alert.get("solution") or "").strip()
+            reference = str(alert.get("reference") or "").strip()
+            
             instances = alert.get("instances") or []
             first_instance = instances[0] if isinstance(instances, list) and instances else {}
             uri = report_uri
@@ -399,20 +414,44 @@ def _parse_zap(report_dir: Path, json_name: str, prefix: str) -> list[dict[str, 
             count = len(instances) if isinstance(instances, list) and instances else 1
             alert_name = str(alert.get("alert") or "OWASP ZAP finding")
             desc = str(alert.get("desc") or "").strip()
-            message = f"{alert_name} (risk={sev}, instances={count})"
+            
+            # Build enhanced message with more context
+            message = f"{alert_name} (risk={sev}, confidence={confidence}, instances={count}"
+            if cweid:
+                message += f", CWE-{cweid}"
+            message += ")"
             if desc:
-                message += f" - {desc[:240]}"
-            findings.append(
-                _mk_finding(
-                    rule_id=f"{prefix}.{plugin}",
-                    rule_name=f"OWASP ZAP {prefix} finding",
-                    message=message,
-                    level=level,
-                    uri=uri,
-                    line=line,
-                    tags=["security", "dast", sev],
-                )
+                message += f" - {desc[:200]}"
+            if solution:
+                message += f" Solution: {solution[:150]}"
+            
+            # Build enhanced tags
+            tags = ["security", "dast", sev, f"confidence-{confidence.lower()}"]
+            if cweid:
+                tags.append(f"CWE-{cweid}")
+            if wascid:
+                tags.append(f"WASC-{wascid}")
+            
+            # Build help URI from reference if available
+            help_uri = None
+            if reference:
+                ref_lines = [r.strip() for r in reference.split('\n') if r.strip()]
+                for ref_line in ref_lines:
+                    if ref_line.startswith('http://') or ref_line.startswith('https://'):
+                        help_uri = ref_line
+                        break
+            
+            finding = _mk_finding(
+                rule_id=f"{prefix}.{plugin}",
+                rule_name=f"OWASP ZAP {prefix} finding",
+                message=message,
+                level=level,
+                uri=uri,
+                line=line,
+                tags=tags,
+                help_uri=help_uri,
             )
+            findings.append(finding)
     return findings
 
 

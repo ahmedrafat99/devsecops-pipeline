@@ -213,11 +213,11 @@ jobs:
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://php-app \
+            -l INFO \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
-            -w zap-warnings.md \
-            -I
+            -w zap-warnings.md
         continue-on-error: true
 
       - name: Preserve ZAP baseline artifacts
@@ -242,13 +242,14 @@ jobs:
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
             -t http://php-app \
-            -m 5 \
+            -m 20 \
             -a \
+            -l INFO \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
             -w zap-warnings.md \
-            -I
+            -z "-config spider.maxDuration=10 -config scanner.threadPerHost=5 -config connection.timeoutInSecs=60"
         continue-on-error: true
 
       - name: Normalize ZAP artifacts
