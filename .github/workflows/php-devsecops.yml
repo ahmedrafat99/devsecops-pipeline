@@ -251,6 +251,7 @@ jobs:
             -J zap-report.json \
             -x zap-report.xml \
             -w zap-warnings.md \
+            -I \
             -z "-config spider.maxDuration=10 -config scanner.threadPerHost=5 -config connection.timeoutInSecs=60"
         continue-on-error: true
 
