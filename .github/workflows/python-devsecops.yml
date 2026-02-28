@@ -516,17 +516,30 @@ jobs:
             if isinstance(data, dict) and data.get("status") == "missing":
               return {"status": "missing", "message": data.get("message", "report missing")}
             sites = data.get("site", []) if isinstance(data, dict) else []
-            counts = Counter()
-            total = 0
             risk_map = {"0": "info", "1": "low", "2": "medium", "3": "high"}
+            alert_type_counts = Counter()
+            instance_counts = Counter()
+            alert_types_total = 0
+            instances_total = 0
             for site in sites:
               for alert in site.get("alerts", []):
                 risk = risk_map.get(str(alert.get("riskcode", "")), "unknown")
                 instances = alert.get("instances") or []
                 n = len(instances) if instances else 1
-                counts[risk] += n
-                total += n
-            return {"status": "available", "alerts": total, "levels": dict(sorted(counts.items()))}
+                alert_type_counts[risk] += 1
+                instance_counts[risk] += n
+                alert_types_total += 1
+                instances_total += n
+            ordered = ["high", "medium", "low", "info", "unknown"]
+            alert_types_levels = {k: int(alert_type_counts.get(k, 0)) for k in ordered}
+            instance_levels = {k: int(instance_counts.get(k, 0)) for k in ordered}
+            return {
+              "status": "available",
+              "alert_types": alert_types_total,
+              "instances": instances_total,
+              "levels_alert_types": alert_types_levels,
+              "levels_instances": instance_levels,
+            }
 
           semgrep = parse_sarif("semgrep.sarif")
           trivy_deps = parse_sarif("trivy-deps.sarif")
@@ -551,9 +564,19 @@ jobs:
             order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
             return ", ".join(f"{k}:{obj['severities'][k]}" for k in order if k in obj["severities"])
 
+          def fmt_zap_levels(levels: dict) -> str:
+            order = ["high", "medium", "low", "info", "unknown"]
+            return ", ".join(f"{k}:{int(levels.get(k, 0))}" for k in order)
+
           def fmt_zap(obj, outcome: str) -> str:
             if obj and obj.get("status") == "available":
-              return f"report=available; alerts={obj.get('alerts', 'N/A')}; levels={fmt_levels(obj)}; step={outcome}"
+              return (
+                f"report=available; alert_types={obj.get('alert_types', 'N/A')}; "
+                f"instances={obj.get('instances', 'N/A')}; "
+                f"levels(alert_types)={fmt_zap_levels(obj.get('levels_alert_types', {}))}; "
+                f"levels(instances)={fmt_zap_levels(obj.get('levels_instances', {}))}; "
+                f"step={outcome}"
+              )
             if obj:
               return f"status={obj.get('status', 'missing')}; step={outcome}; {obj.get('message', 'report missing')}"
             return f"status=missing; step={outcome}; report missing"
