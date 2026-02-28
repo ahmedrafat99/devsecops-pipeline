@@ -161,10 +161,12 @@ jobs:
             -t http://reactjs-app:3000 \
             -j \
             -l INFO \
+            -g gen.conf \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
-            -w zap-warnings.md
+            -w zap-warnings.md \
+            -I
         continue-on-error: true
 
       - name: Preserve ZAP baseline artifacts

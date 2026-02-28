@@ -189,10 +189,12 @@ jobs:
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t http://pygoat-app:8000 \
             -l INFO \
+            -g gen.conf \
             -r zap-report.html \
             -J zap-report.json \
             -x zap-report.xml \
-            -w zap-warnings.md
+            -w zap-warnings.md \
+            -I
         continue-on-error: true
 
       - name: Preserve ZAP baseline artifacts
