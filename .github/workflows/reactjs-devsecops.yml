@@ -235,14 +235,14 @@ jobs:
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
-          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
-          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
-          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
-          [ -f reports/trufflehog.sarif ] || echo '{"runs":[]}' > reports/trufflehog.sarif
-          [ -f reports/npm-audit.sarif ] || echo '{"runs":[]}' > reports/npm-audit.sarif
-          [ -f reports/zap-baseline.sarif ] || echo '{"runs":[]}' > reports/zap-baseline.sarif
-          [ -f reports/zap-full.sarif ] || echo '{"runs":[]}' > reports/zap-full.sarif
+          [ -f reports/semgrep.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trufflehog.sarif
+          [ -f reports/npm-audit.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/npm-audit.sarif
+          [ -f reports/zap-baseline.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/zap-baseline.sarif
+          [ -f reports/zap-full.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/zap-full.sarif
 
       - name: Upload SARIF - Semgrep
         if: always()
@@ -481,10 +481,10 @@ jobs:
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
-          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
-          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
-          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/semgrep.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/gitleaks.sarif
           [ -f reports/npm-audit.json ] || echo '{"status":"missing"}' > reports/npm-audit.json
           [ -f reports/trufflehog.json ] || echo "[]" > reports/trufflehog.json
           [ -f reports/summary.md ] || cat > reports/summary.md <<'EOF'

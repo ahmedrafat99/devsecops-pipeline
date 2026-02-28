@@ -271,15 +271,15 @@ jobs:
         shell: bash
         working-directory: ${{ steps.project.outputs.dir }}
         run: |
-          [ -f reports/semgrep.sarif ] || echo '{"runs":[]}' > reports/semgrep.sarif
-          [ -f reports/trivy-deps.sarif ] || echo '{"runs":[]}' > reports/trivy-deps.sarif
-          [ -f reports/trivy-image.sarif ] || echo '{"runs":[]}' > reports/trivy-image.sarif
-          [ -f reports/gitleaks.sarif ] || echo '{"runs":[]}' > reports/gitleaks.sarif
-          [ -f reports/trufflehog.sarif ] || echo '{"runs":[]}' > reports/trufflehog.sarif
-          [ -f reports/safety.sarif ] || echo '{"runs":[]}' > reports/safety.sarif
-          [ -f reports/pip-audit.sarif ] || echo '{"runs":[]}' > reports/pip-audit.sarif
-          [ -f reports/zap-baseline.sarif ] || echo '{"runs":[]}' > reports/zap-baseline.sarif
-          [ -f reports/zap-full.sarif ] || echo '{"runs":[]}' > reports/zap-full.sarif
+          [ -f reports/semgrep.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/semgrep.sarif
+          [ -f reports/trivy-deps.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trivy-deps.sarif
+          [ -f reports/trivy-image.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trivy-image.sarif
+          [ -f reports/gitleaks.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/gitleaks.sarif
+          [ -f reports/trufflehog.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/trufflehog.sarif
+          [ -f reports/safety.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/safety.sarif
+          [ -f reports/pip-audit.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/pip-audit.sarif
+          [ -f reports/zap-baseline.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/zap-baseline.sarif
+          [ -f reports/zap-full.sarif ] || echo '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > reports/zap-full.sarif
 
       - name: Upload SARIF - Semgrep
         if: always()
