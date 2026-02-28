@@ -217,7 +217,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}/${{ steps.project.outputs.dir }}/reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
             -t http://pygoat-app:8000 \
-            -m 20 \
+            -m 0 \
             -a \
             -l INFO \
             -r zap-report.html \

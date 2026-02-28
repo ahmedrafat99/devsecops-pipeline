@@ -1,0 +1,85 @@
+---
+env:
+  contexts:
+    - name: "PyGoat Context"
+      urls:
+        - "http://pygoat-app:8000"
+      includePaths:
+        - "http://pygoat-app:8000/.*"
+      excludePaths: []
+      authentication:
+        method: "manual"
+      sessionManagement:
+        method: "cookie"
+
+  parameters:
+    failOnError: false
+    failOnWarning: false
+    progressToStdout: true
+
+  vars: {}
+
+jobs:
+  - type: spider
+    parameters:
+      maxDuration: 10
+      maxDepth: 5
+      maxChildren: 10
+    name: spider
+
+  - type: spiderAjax
+    parameters:
+      maxDuration: 10
+      maxCrawlDepth: 10
+      numberOfBrowsers: 1
+    name: spiderAjax
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+    name: passiveScan-wait
+
+  - type: activeScan
+    parameters:
+      maxRuleDurationInMins: 2
+      maxScanDurationInMins: 15
+      threadPerHost: 5
+      delayInMs: 0
+    name: activeScan
+
+  - type: report
+    parameters:
+      template: "traditional-html"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-report.html"
+      reportTitle: "PyGoat ZAP Report"
+      reportDescription: "OWASP ZAP Active Scan Report"
+    risks:
+      - high
+      - medium
+      - low
+      - info
+    confidences:
+      - high
+      - medium
+      - low
+      - falsepositive
+    sections:
+      - passingrules
+      - instancecount
+      - alertdetails
+      - alertcount
+      - chart
+      - statistics
+
+  - type: report
+    parameters:
+      template: "traditional-json"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-report.json"
+
+  - type: report
+    parameters:
+      template: "traditional-xml"
+      reportDir: "/zap/wrk"
+      reportFile: "zap-report.xml"
